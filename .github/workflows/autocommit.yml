@@ -1,0 +1,395 @@
+name: AutoCommit Generator
+
+on:
+  schedule:
+    # Main commit window: runs every hour from 07:00 to 23:00 IST
+    # IST = UTC+5:30, so 07:00 IST = 01:30 UTC, 23:00 IST = 17:30 UTC
+    # GitHub cron minimum is 5 minutes; we use hourly and let Python control exact timing
+    - cron: '30 1-18 * * *'   # 07:00–23:30 IST window (UTC 01:30–18:30)
+
+    # Tuesday 9:00am IST = Tuesday 03:30 UTC — weekly Telegram report
+    - cron: '30 3 * * 2'
+
+    # Streak break warning — runs at 8pm IST = 14:30 UTC every day
+    - cron: '30 14 * * *'
+
+  workflow_dispatch:
+    inputs:
+      force_commit:
+        description: 'Force a manual commit now (ignores sick day / mode)'
+        required: false
+        default: false
+        type: boolean
+      debug_mode:
+        description: 'Run in debug mode (dry run — no actual commits)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  TZ: Asia/Kolkata
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  # ══════════════════════════════════════════════════════════════════════════
+  # JOB 1: Determine what this run should do
+  # ══════════════════════════════════════════════════════════════════════════
+  decide:
+    name: Decide Run Type
+    runs-on: ubuntu-latest
+    outputs:
+      run_type: ${{ steps.decide.outputs.run_type }}
+      is_tuesday: ${{ steps.decide.outputs.is_tuesday }}
+      is_streak_warning: ${{ steps.decide.outputs.is_streak_warning }}
+      force_commit: ${{ steps.decide.outputs.force_commit }}
+    steps:
+      - name: Determine run type
+        id: decide
+        run: |
+          HOUR=$(TZ=Asia/Kolkata date +%H)
+          MINUTE=$(TZ=Asia/Kolkata date +%M)
+          DOW=$(TZ=Asia/Kolkata date +%u)   # 1=Mon, 2=Tue, ... 7=Sun
+          TIME_MIN=$((HOUR * 60 + MINUTE))
+          
+          echo "IST time: $(TZ=Asia/Kolkata date)"
+          echo "Day of week: $DOW"
+          
+          FORCE="${{ github.event.inputs.force_commit }}"
+          IS_TUESDAY="false"
+          IS_STREAK_WARNING="false"
+          RUN_TYPE="commit"
+          
+          # Tuesday 9am IST window: 8:45–9:15
+          if [[ "$DOW" == "2" && "$TIME_MIN" -ge 525 && "$TIME_MIN" -le 555 ]]; then
+            IS_TUESDAY="true"
+            RUN_TYPE="weekly_report"
+          fi
+          
+          # Streak warning: 8pm IST = 1200 minutes, window 1185–1215
+          if [[ "$TIME_MIN" -ge 1185 && "$TIME_MIN" -le 1215 ]]; then
+            IS_STREAK_WARNING="true"
+            RUN_TYPE="streak_warning"
+          fi
+          
+          # Manual trigger always commits
+          if [[ "$FORCE" == "true" ]]; then
+            RUN_TYPE="force_commit"
+          fi
+          
+          echo "run_type=$RUN_TYPE"        >> $GITHUB_OUTPUT
+          echo "is_tuesday=$IS_TUESDAY"    >> $GITHUB_OUTPUT
+          echo "is_streak_warning=$IS_STREAK_WARNING" >> $GITHUB_OUTPUT
+          echo "force_commit=$FORCE"       >> $GITHUB_OUTPUT
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # JOB 2: Streak Break Warning (fires at 8pm IST)
+  # ══════════════════════════════════════════════════════════════════════════
+  streak_warning:
+    name: Streak Break Warning
+    runs-on: ubuntu-latest
+    needs: decide
+    if: needs.decide.outputs.is_streak_warning == 'true'
+    steps:
+      - name: Checkout project repo
+        uses: actions/checkout@v4
+
+      - name: Checkout archive repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/commit-archive
+          token: ${{ secrets.ARCHIVE_REPO_PAT }}
+          path: archive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Send streak warning if needed
+        working-directory: archive
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          cp ../scripts/telegram_notifier.py .
+          python telegram_notifier.py --streak-warning
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # JOB 3: Weekly Telegram Report (every Tuesday 9am IST)
+  # ══════════════════════════════════════════════════════════════════════════
+  weekly_report:
+    name: Weekly Telegram Report
+    runs-on: ubuntu-latest
+    needs: decide
+    if: needs.decide.outputs.is_tuesday == 'true'
+    steps:
+      - name: Checkout project repo
+        uses: actions/checkout@v4
+
+      - name: Checkout archive repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/commit-archive
+          token: ${{ secrets.ARCHIVE_REPO_PAT }}
+          path: archive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install requests reportlab
+
+      - name: Generate and send weekly report
+        working-directory: archive
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          DASHBOARD_URL:      ${{ secrets.DASHBOARD_URL }}
+        run: |
+          cp ../scripts/telegram_notifier.py .
+          python telegram_notifier.py
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # JOB 4: Main Auto-Commit Job
+  # ══════════════════════════════════════════════════════════════════════════
+  autocommit:
+    name: AutoCommit Engine
+    runs-on: ubuntu-latest
+    needs: decide
+    if: >
+      needs.decide.outputs.run_type == 'commit' ||
+      needs.decide.outputs.run_type == 'force_commit'
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout project repo (scripts + config)
+        uses: actions/checkout@v4
+
+      - name: Checkout archive repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/commit-archive
+          token: ${{ secrets.ARCHIVE_REPO_PAT }}
+          path: archive
+          fetch-depth: 0
+
+      # ── Python setup ──────────────────────────────────────────────────────
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          pip install gitpython pandas openpyxl requests reportlab
+
+      # ── Read config from archive repo ─────────────────────────────────────
+      - name: Read runtime config
+        id: config
+        working-directory: archive
+        run: |
+          if [ -f config.json ]; then
+            cp config.json ../config.json
+          else
+            echo "config.json not found in archive — using project repo default"
+            cp ../config.json . 2>/dev/null || echo '{"active":true}' > config.json
+          fi
+          
+          # Copy message pool
+          if [ -f ../message_pool.json ]; then
+            cp ../message_pool.json message_pool.json
+          fi
+          
+          ACTIVE=$(python3 -c "import json; cfg=json.load(open('config.json')); print(str(cfg.get('active', True)).lower())")
+          echo "system_active=$ACTIVE" >> $GITHUB_OUTPUT
+          echo "System active: $ACTIVE"
+
+      # ── Early exit if system disabled ─────────────────────────────────────
+      - name: Check if system is active
+        if: steps.config.outputs.system_active == 'false'
+        run: |
+          echo "AutoCommit system is DISABLED via config.json. Exiting."
+          exit 0
+
+      # ── Run pattern engine ────────────────────────────────────────────────
+      - name: Run pattern engine (determine commits)
+        working-directory: archive
+        run: |
+          cp ../scripts/pattern_engine.py .
+          python pattern_engine.py
+          
+          # Show plan
+          echo "--- Commit Plan ---"
+          cat commit_plan.json
+          echo "-------------------"
+
+      # ── Check mode (skip if REST) ─────────────────────────────────────────
+      - name: Check commit mode
+        id: mode
+        working-directory: archive
+        run: |
+          MODE=$(python3 -c "import json; plan=json.load(open('commit_plan.json')); print(plan['mode'])")
+          COUNT=$(python3 -c "import json; plan=json.load(open('commit_plan.json')); print(len(plan['commits']))")
+          echo "mode=$MODE" >> $GITHUB_OUTPUT
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          echo "Commit mode: $MODE | Count: $COUNT"
+
+      # ── Configure git identity ─────────────────────────────────────────────
+      - name: Configure git identity
+        if: steps.mode.outputs.mode != 'Rest'
+        working-directory: archive
+        run: |
+          git config user.email "${{ secrets.COMMIT_EMAIL }}"
+          git config user.name "${{ secrets.COMMIT_NAME }}"
+          git remote set-url origin https://x-access-token:${{ secrets.ARCHIVE_REPO_PAT }}@github.com/${{ github.repository_owner }}/commit-archive.git
+
+      # ── Execute commits ────────────────────────────────────────────────────
+      - name: Execute auto-commits
+        if: steps.mode.outputs.mode != 'Rest' && steps.mode.outputs.count != '0'
+        working-directory: archive
+        env:
+          DEBUG_MODE: ${{ github.event.inputs.debug_mode }}
+          FORCE_COMMIT: ${{ needs.decide.outputs.force_commit }}
+        run: |
+          cp ../scripts/file_mutator.py .
+          
+          python3 << 'EOF'
+          import json
+          import subprocess
+          import datetime
+          import os
+          import sys
+          
+          IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+          debug = os.environ.get("DEBUG_MODE", "false").lower() == "true"
+          
+          with open("commit_plan.json") as f:
+              plan = json.load(f)
+          
+          commits = plan.get("commits", [])
+          if not commits:
+              print("No commits in plan — skipping.")
+              sys.exit(0)
+          
+          today = plan["date"]
+          
+          for i, commit_info in enumerate(commits):
+              time_str = commit_info["time"]     # HH:MM:SS
+              message  = commit_info["message"]
+              
+              # Build IST timestamp for this commit
+              h, m, s = map(int, time_str.split(":"))
+              commit_dt = datetime.datetime.fromisoformat(today).replace(
+                  hour=h, minute=m, second=s,
+                  tzinfo=IST
+              )
+              # Format for GIT_AUTHOR_DATE
+              git_timestamp = commit_dt.strftime("%Y-%m-%dT%H:%M:%S%z")
+              # Fix timezone format: +0530 → +05:30
+              git_timestamp = git_timestamp[:-2] + ":" + git_timestamp[-2:]
+              
+              print(f"\n[{i+1}/{len(commits)}] Commit: {message}")
+              print(f"  Timestamp: {git_timestamp}")
+              
+              if debug:
+                  print("  [DEBUG MODE] Skipping actual commit")
+                  continue
+              
+              # Apply file mutation
+              result = subprocess.run(
+                  ["python3", "file_mutator.py"],
+                  capture_output=True, text=True
+              )
+              print(result.stdout.strip())
+              if result.returncode != 0:
+                  print(f"  [WARN] file_mutator error: {result.stderr}", file=sys.stderr)
+              
+              # Stage and commit with IST timestamp
+              subprocess.run(["git", "add", "activity_log.txt"], check=True)
+              
+              env = {
+                  **dict(os.environ),
+                  "GIT_AUTHOR_DATE":    git_timestamp,
+                  "GIT_COMMITTER_DATE": git_timestamp,
+              }
+              subprocess.run(
+                  ["git", "commit", "-m", message],
+                  env=env, check=True
+              )
+              print(f"  ✓ Committed: {message[:60]}")
+          
+          print(f"\nAll {len(commits)} commits done.")
+          EOF
+
+      # ── Run quality scorer ────────────────────────────────────────────────
+      - name: Run quality scorer
+        if: steps.mode.outputs.mode != 'Rest'
+        working-directory: archive
+        run: |
+          cp ../scripts/quality_scorer.py .
+          python quality_scorer.py
+
+      # ── Stage and push all tracking files ────────────────────────────────
+      - name: Push all changes to archive repo
+        if: steps.mode.outputs.mode != 'Rest'
+        working-directory: archive
+        env:
+          DEBUG_MODE: ${{ github.event.inputs.debug_mode }}
+        run: |
+          if [[ "$DEBUG_MODE" == "true" ]]; then
+            echo "[DEBUG] Skipping push in debug mode"
+            exit 0
+          fi
+          
+          # Stage tracking files
+          git add commit_history.json streak_stats.json quality_score.json \
+                  commit_plan.json config.json 2>/dev/null || true
+          
+          # Commit tracking files if changed
+          if git diff --staged --quiet; then
+            echo "No tracking file changes to commit."
+          else
+            git commit -m "chore: update commit tracking metadata [skip ci]"
+          fi
+          
+          # Push all commits
+          git push origin main
+          echo "✓ Pushed to commit-archive"
+
+      # ── Summary ────────────────────────────────────────────────────────────
+      - name: Print run summary
+        working-directory: archive
+        run: |
+          echo ""
+          echo "╔══════════════════════════════════════╗"
+          echo "║     AutoCommit Generator Summary     ║"
+          echo "╚══════════════════════════════════════╝"
+          echo ""
+          echo "Mode:       ${{ steps.mode.outputs.mode }}"
+          echo "Commits:    ${{ steps.mode.outputs.count }}"
+          echo "Date (IST): $(TZ=Asia/Kolkata date +%Y-%m-%d)"
+          echo ""
+          
+          if [ -f quality_score.json ]; then
+            python3 -c "
+          import json
+          q = json.load(open('quality_score.json'))
+          print(f'Quality: {q[\"score\"]}/100 — {q[\"status_label\"]}')
+          "
+          fi
+          
+          if [ -f streak_stats.json ]; then
+            python3 -c "
+          import json
+          s = json.load(open('streak_stats.json'))
+          print(f'Streak: {s.get(\"current_streak\",0)} days (longest: {s.get(\"longest_streak\",0)})')
+          print(f'Total:  {s.get(\"total_commits\",0):,} commits')
+          "
+          fi
