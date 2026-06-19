@@ -26,6 +26,13 @@ try:
 except ImportError:
     AI_GENERATOR_AVAILABLE = False
 
+# Indian calendar mood engine — imported lazily, defaults to normal mood on failure
+try:
+    from indian_calendar import get_today_mood
+    MOOD_ENGINE_AVAILABLE = True
+except ImportError:
+    MOOD_ENGINE_AVAILABLE = False
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -34,6 +41,7 @@ HISTORY_FILE = "commit_history.json"
 STREAK_FILE  = "streak_stats.json"
 CONFIG_FILE  = "config.json"
 MSG_POOL_FILE = "message_pool.json"
+MOOD_MSG_FILE = "mood_messages.json"
 
 SIMILARITY_THRESHOLD = 0.75   # Reject if ≥75% similar to any 180-day msg
 HISTORY_DAYS         = 180
@@ -477,12 +485,51 @@ def main() -> None:
     else:
         print("[AutoCommit] No pattern_profile.json found — using defaults.")
 
+    # ── Step 0: Evaluate today's mood (Indian Calendar) ──────────────────────
+    # Must run BEFORE mode selection so multiplier can adjust the commit count.
+    mood_result = {"mood": "normal", "commit_multiplier": 1.0,
+                   "skip_probability": 0.15, "message_category": None,
+                   "occasion": "", "log": ""}
+    try:
+        if MOOD_ENGINE_AVAILABLE:
+            mood_override = config.get("mood_override", None)
+            mood_result = get_today_mood(override=mood_override)
+        else:
+            print("[AutoCommit] 📅 indian_calendar not available — using normal mood.")
+    except Exception as _me:
+        print(f"[AutoCommit] ⚠️  Mood engine error: {_me} — defaulting to normal.",
+              file=sys.stderr)
+
+    # Apply skip probability (hard skip of the entire day)
+    skip_p = mood_result.get("skip_probability", 0.15)
+    if random.random() < skip_p:
+        plan = {
+            "date": today_str(),
+            "mode": MODE_REST,
+            "mood": mood_result.get("mood", "normal"),
+            "occasion": mood_result.get("occasion", ""),
+            "commits": [],
+        }
+        save_json("commit_plan.json", plan)
+        print(f"[AutoCommit] 🎭 Mood skip triggered ({mood_result['mood']}, "
+              f"skip_p={skip_p:.2f}) — no commits today.")
+        streak_stats = update_streak_stats(history, streak_stats, 0)
+        save_json(STREAK_FILE, streak_stats)
+        return
+
     # Prune old history entries
     history = prune_history(history)
 
     # Determine today's mode
     mode  = select_mode(config, history)
     count = commit_count_for_mode(mode, config, profile)
+
+    # Apply mood commit_multiplier to count
+    multiplier = mood_result.get("commit_multiplier", 1.0)
+    if multiplier != 1.0:
+        count = max(0, int(count * multiplier))
+        print(f"[AutoCommit] 🎭 Mood '{mood_result['mood']}' (×{multiplier}) → "
+              f"adjusted count: {count}")
 
     print(f"[AutoCommit] Mode: {mode} | Commits planned: {count}")
 
@@ -491,6 +538,8 @@ def main() -> None:
         plan = {
             "date": today_str(),
             "mode": MODE_REST,
+            "mood": mood_result.get("mood", "normal"),
+            "occasion": mood_result.get("occasion", ""),
             "commits": [],
         }
         save_json("commit_plan.json", plan)
@@ -516,22 +565,33 @@ def main() -> None:
     else:
         print("[AutoCommit] ai_commit_generator not available — using static pool only.")
 
+    # ── Step 1b: Inject mood-specific messages at highest priority ───────────
+    mood_messages: list[str] = []
+    mood_category = mood_result.get("message_category")
+    if mood_category:
+        try:
+            mood_pool = load_json(MOOD_MSG_FILE)
+            mood_messages = mood_pool.get(mood_category, [])
+            if mood_messages:
+                print(f"[AutoCommit] 🎭 Mood messages: {len(mood_messages)} '{mood_category}' "
+                      f"messages loaded from mood_messages.json")
+        except Exception as _mme:
+            print(f"[AutoCommit] ⚠️  Could not load mood_messages.json: {_mme}",
+                  file=sys.stderr)
+
     # ── Step 2: Build a merged pool for pick_unique_messages ─────────────────
-    # AI messages are injected as a synthetic single-category pool so the
-    # existing 180-day difflib uniqueness check still runs on every candidate.
+    # Priority order: mood-specific → AI-generated → static pool
+    merged_categories: dict = {}
+    if mood_messages:
+        merged_categories["mood_" + (mood_category or "misc")] = mood_messages
     if ai_messages:
-        merged_pool = {
-            "categories": {
-                "ai_generated": ai_messages,
-                # Append static pool categories as backup reserve
-                **message_pool.get("categories", {}),
-            }
-        }
-        print(f"[AutoCommit] AI pool: {len(ai_messages)} messages | "
-              f"Static pool: {sum(len(v) for v in message_pool.get('categories', {}).values())} messages")
-    else:
-        merged_pool = message_pool
-        print("[AutoCommit] Using static message_pool.json only.")
+        merged_categories["ai_generated"] = ai_messages
+    merged_categories.update(message_pool.get("categories", {}))
+
+    merged_pool = {"categories": merged_categories}
+    total_static = sum(len(v) for v in message_pool.get("categories", {}).values())
+    print(f"[AutoCommit] Pool sizes — mood: {len(mood_messages)} | "
+          f"AI: {len(ai_messages)} | static: {total_static}")
 
     # ── Step 3: Pick unique messages with 180-day semantic check ─────────────
     messages = pick_unique_messages(count, history_msgs, merged_pool, threshold, profile)
@@ -551,6 +611,8 @@ def main() -> None:
     plan = {
         "date": today_str(),
         "mode": mode,
+        "mood": mood_result.get("mood", "normal"),
+        "occasion": mood_result.get("occasion", ""),
         "commits": commits,
     }
     save_json("commit_plan.json", plan)

@@ -269,11 +269,14 @@ jobs:
       - name: Run pattern engine (determine commits)
         working-directory: archive
         env:
-          GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
-          PROJECT_EXTENSIONS:  ${{ vars.PROJECT_EXTENSIONS || '.py,.js,.jsx,.json,.yml,.sh,.md' }}
+          GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
+          CALENDARIFIC_API_KEY:   ${{ secrets.CALENDARIFIC_API_KEY }}
+          PROJECT_EXTENSIONS:     ${{ vars.PROJECT_EXTENSIONS || '.py,.js,.jsx,.json,.yml,.sh,.md' }}
         run: |
           cp ../scripts/pattern_engine.py .
           cp ../scripts/ai_commit_generator.py .
+          cp ../scripts/indian_calendar.py .
+          cp ../scripts/mood_messages.json .
           python pattern_engine.py
           
           # Show plan

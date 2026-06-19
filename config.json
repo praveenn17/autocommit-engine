@@ -23,6 +23,8 @@
   "quality_safe_threshold": 75,
   "telegram_report_day": "Tuesday",
   "telegram_report_hour_ist": 9,
-  "version": "1.0.0",
+  "mood_override": null,
+  "manual_mode": null,
+  "version": "1.1.0",
   "created_at": "2026-06-03"
 }

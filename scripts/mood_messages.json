@@ -1,0 +1,85 @@
+{
+  "_comment": "AutoCommit Generator — Mood-specific commit messages. All follow conventional commit format.",
+  "_version": "1.0.0",
+
+  "celebration": [
+    "chore: quick push before the Diwali break begins",
+    "docs: wrapping up loose ends before the holidays",
+    "fix: last-minute patch before stepping away for festivities",
+    "chore: small cleanup before I head out for Holi",
+    "docs: adding final notes before the long weekend",
+    "refactor: quick polish before the holiday break",
+    "chore: committing draft work before Eid celebrations",
+    "fix: resolved that nagging edge case before Christmas",
+    "docs: update changelog ahead of the New Year",
+    "chore: archive uncommitted progress before the festival",
+    "style: minor formatting before signing off for Diwali",
+    "perf: squeezing in a small optimisation before the break",
+    "chore: end-of-day commit before Republic Day holiday",
+    "docs: readme update before Independence Day weekend",
+    "fix: hotfix pushed before the long Gandhi Jayanti break"
+  ],
+
+  "exam_mode": [
+    "chore: small fix during a study break",
+    "docs: update notes between revision sessions",
+    "fix: quick bug patch found while reviewing code notes",
+    "chore: minor cleanup during JEE prep downtime",
+    "docs: adding comments I meant to write weeks ago",
+    "style: fixing indentation found while skimming code",
+    "chore: tiny commit to keep the streak alive during exams",
+    "fix: resolved trivial warning noticed during a break",
+    "docs: quick doc update during revision hour",
+    "chore: housekeeping task done between study sessions"
+  ],
+
+  "college_holiday_burst": [
+    "feat: finally time to implement that feature I planned",
+    "refactor: summer cleanup of legacy code modules",
+    "feat: adding the API integration I put off all semester",
+    "perf: profiling and optimising the hot path during break",
+    "feat: new dashboard component built during summer break",
+    "refactor: restructuring the codebase with fresh eyes",
+    "feat: prototype of the long-planned authentication flow",
+    "test: writing the test suite I never had time for",
+    "feat: winter break project — CLI tool scaffolding",
+    "refactor: deep dive into the data layer while on holiday"
+  ],
+
+  "monday_energy": [
+    "feat: starting the week strong with a new feature",
+    "refactor: Monday morning code cleanup session",
+    "feat: kicking off the sprint with this module",
+    "fix: resolving that issue from last week's backlog",
+    "feat: implementing the first card of the new sprint",
+    "refactor: fresh week, fresh eyes — cleaning up utils",
+    "chore: Monday dependency updates and housekeeping",
+    "feat: new week, new feature — user settings panel",
+    "perf: Monday optimisation pass on the data pipeline",
+    "fix: tackling the most annoying open bug first thing"
+  ],
+
+  "friday_relax": [
+    "chore: end-of-week cleanup and minor fixes",
+    "fix: small fix before I close the laptop for the weekend",
+    "docs: wrapping up documentation for the week",
+    "chore: final commit before the Friday wind-down",
+    "style: minor formatting pass to end the week cleanly",
+    "fix: squashing one last bug before the weekend",
+    "chore: archiving in-progress work for the week",
+    "docs: updating the project notes — end of week summary",
+    "refactor: light refactor to end the Friday on a clean note",
+    "chore: closing out open tasks before the weekend"
+  ],
+
+  "weekend_light": [
+    "chore: small weekend hack session commit",
+    "fix: found a bug while browsing code on Saturday",
+    "docs: jotting down weekend ideas in the docs",
+    "chore: minor tweak during Sunday morning coffee",
+    "fix: quick patch — couldn't stop thinking about this one",
+    "style: cleaned up a file while relaxing",
+    "chore: weekend progress on the side project",
+    "docs: notes from weekend reading added to the project"
+  ]
+}
