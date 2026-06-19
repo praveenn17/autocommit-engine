@@ -188,7 +188,7 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install gitpython pandas openpyxl requests reportlab
+          pip install gitpython pandas openpyxl requests reportlab google-generativeai
 
       # ── Read config from archive repo ─────────────────────────────────────
       - name: Read runtime config
@@ -221,8 +221,12 @@ jobs:
       # ── Run pattern engine ────────────────────────────────────────────────
       - name: Run pattern engine (determine commits)
         working-directory: archive
+        env:
+          GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
+          PROJECT_EXTENSIONS:  ${{ vars.PROJECT_EXTENSIONS || '.py,.js,.jsx,.json,.yml,.sh,.md' }}
         run: |
           cp ../scripts/pattern_engine.py .
+          cp ../scripts/ai_commit_generator.py .
           python pattern_engine.py
           
           # Show plan

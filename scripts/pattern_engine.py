@@ -19,6 +19,13 @@ import difflib
 from pathlib import Path
 from typing import Any
 
+# AI commit generator — imported lazily so the engine still works without it
+try:
+    from ai_commit_generator import generate_ai_messages, parse_extensions
+    AI_GENERATOR_AVAILABLE = True
+except ImportError:
+    AI_GENERATOR_AVAILABLE = False
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -412,8 +419,37 @@ def main() -> None:
     history_msgs = load_all_history_messages(history)
     threshold = config.get("similarity_threshold", SIMILARITY_THRESHOLD)
 
-    # Select messages
-    messages = pick_unique_messages(count, history_msgs, message_pool, threshold)
+    # ── Step 1: Try AI-generated messages (Gemini) ───────────────────────────
+    # Detect project file extensions from environment (set by workflow)
+    # Falls back to message_pool.json automatically if API key absent / fails
+    ai_messages: list[str] = []
+    if AI_GENERATOR_AVAILABLE:
+        raw_exts = os.environ.get("PROJECT_EXTENSIONS", ".py,.js,.jsx,.json,.yml")
+        extensions = parse_extensions(raw_exts)
+        print(f"[AutoCommit] Requesting AI messages for extensions: {', '.join(extensions)}")
+        ai_messages = generate_ai_messages(extensions, history_msgs)
+    else:
+        print("[AutoCommit] ai_commit_generator not available — using static pool only.")
+
+    # ── Step 2: Build a merged pool for pick_unique_messages ─────────────────
+    # AI messages are injected as a synthetic single-category pool so the
+    # existing 180-day difflib uniqueness check still runs on every candidate.
+    if ai_messages:
+        merged_pool = {
+            "categories": {
+                "ai_generated": ai_messages,
+                # Append static pool categories as backup reserve
+                **message_pool.get("categories", {}),
+            }
+        }
+        print(f"[AutoCommit] AI pool: {len(ai_messages)} messages | "
+              f"Static pool: {sum(len(v) for v in message_pool.get('categories', {}).values())} messages")
+    else:
+        merged_pool = message_pool
+        print("[AutoCommit] Using static message_pool.json only.")
+
+    # ── Step 3: Pick unique messages with 180-day semantic check ─────────────
+    messages = pick_unique_messages(count, history_msgs, merged_pool, threshold)
     if not messages:
         print("[ERROR] No unique messages available. Exiting.", file=sys.stderr)
         sys.exit(1)
