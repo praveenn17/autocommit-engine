@@ -410,8 +410,9 @@ jobs:
             git commit -m "chore: update commit tracking metadata [skip ci]"
           fi
           
-          # Push all commits
-          git push origin main
+          # Pull any remote changes (e.g. pattern_profile.json from learn_pattern job)
+          # before pushing to avoid non-fast-forward rejection
+          git pull --rebase origin main && git push origin main
           echo "✓ Pushed to commit-archive"
 
       # ── Summary ────────────────────────────────────────────────────────────
