@@ -38,6 +38,7 @@ MSG_POOL_FILE = "message_pool.json"
 SIMILARITY_THRESHOLD = 0.75   # Reject if ≥75% similar to any 180-day msg
 HISTORY_DAYS         = 180
 ACTIVITY_LOG_MAX     = 500
+PROFILE_FILE         = "pattern_profile.json"
 
 # Excel-derived active hour distribution (weighted by real data)
 # Hours extracted from activity_generator.xlsx reference data
@@ -46,6 +47,27 @@ ACTIVE_HOURS_WEIGHTS = {
     13: 6, 14: 9, 15: 11, 16: 10, 17: 8, 18: 9,
     19: 10, 20: 12, 21: 11, 22: 8, 23: 5
 }
+
+def load_profile() -> dict:
+    """
+    Load pattern_profile.json from the archive repo working directory.
+    Returns {} if not found — all callers must handle missing keys gracefully.
+    """
+    return load_json(PROFILE_FILE)
+
+
+def profile_hour_weights(profile: dict) -> dict[int, int]:
+    """
+    Build an hour→weight dict from the profile's commits_by_hour.
+    Falls back to the Excel-derived ACTIVE_HOURS_WEIGHTS if the profile
+    is missing or has all-zero counts.
+    """
+    raw = profile.get("commits_by_hour", {})
+    weights = {int(h): max(1, int(v)) for h, v in raw.items() if int(v) > 0}
+    if not weights:
+        return ACTIVE_HOURS_WEIGHTS
+    return weights
+
 
 # Mode probabilities from PRD Section 3.4
 MODE_QUIET  = "Quiet"
@@ -154,13 +176,34 @@ def select_mode(config: dict, history: dict) -> str:
         return MODE_BURST
 
 
-def commit_count_for_mode(mode: str, config: dict) -> int:
-    """Return number of commits for the selected mode."""
+def commit_count_for_mode(mode: str, config: dict, profile: dict | None = None) -> int:
+    """
+    Return number of commits for the selected mode.
+    When a pattern profile is available, the Normal/Burst counts are drawn
+    from the user's real commits_per_active_day distribution.
+    """
     if mode == MODE_REST:
         return 0
-    elif mode == MODE_QUIET:
+    if mode == MODE_QUIET:
         return 1
-    elif mode == MODE_NORMAL:
+
+    # Use profile distribution when available
+    if profile and mode in (MODE_NORMAL, MODE_BURST):
+        dist = profile.get("commits_per_active_day", {})
+        choices  = ["1", "2", "3", "4+"]
+        weights  = [float(dist.get(k, 0.0)) for k in choices]
+        if sum(weights) > 0:
+            drawn = random.choices(choices, weights=weights, k=1)[0]
+            if mode == MODE_NORMAL:
+                # For Normal, cap at 3
+                return min(int(drawn.replace("+", "")), 3) if drawn != "4+" else 3
+            else:
+                # For Burst, draw is >=4
+                return max(4, int(drawn.replace("+", ""))) if drawn == "4+" \
+                    else random.randint(4, min(config.get("commits_per_day", 7), 7))
+
+    # Legacy config-based fallback
+    if mode == MODE_NORMAL:
         cap = min(config.get("commits_per_day", 3), 3)
         return random.randint(2, cap) if cap >= 2 else 1
     elif mode == MODE_BURST:
@@ -173,11 +216,21 @@ def commit_count_for_mode(mode: str, config: dict) -> int:
 # Timing Engine (PRD Section 3.2)
 # ---------------------------------------------------------------------------
 
-def sample_hour() -> int:
-    """Sample an active hour weighted by real Excel distribution."""
-    hours = list(ACTIVE_HOURS_WEIGHTS.keys())
-    weights = list(ACTIVE_HOURS_WEIGHTS.values())
-    # Weekend: skew toward afternoon (12-20)
+def sample_hour(profile: dict | None = None) -> int:
+    """
+    Sample an active hour.
+    When a pattern profile is available, uses the user's real commits_by_hour
+    weights. Falls back to the Excel-derived static distribution otherwise.
+    """
+    if profile:
+        weights_dict = profile_hour_weights(profile)
+    else:
+        weights_dict = ACTIVE_HOURS_WEIGHTS
+
+    hours   = list(weights_dict.keys())
+    weights = list(weights_dict.values())
+
+    # Weekend: skew toward afternoon (12-20) regardless of profile source
     if is_weekend():
         weights = [
             w * 2 if 12 <= h <= 20 else max(1, w // 2)
@@ -186,7 +239,7 @@ def sample_hour() -> int:
     return random.choices(hours, weights=weights, k=1)[0]
 
 
-def generate_commit_times(count: int, mode: str) -> list[str]:
+def generate_commit_times(count: int, mode: str, profile: dict | None = None) -> list[str]:
     """
     Generate `count` commit times in IST as HH:MM:SS strings.
     Rules:
@@ -213,7 +266,7 @@ def generate_commit_times(count: int, mode: str) -> list[str]:
         # Two sessions separated by 2-4 hours
         session1_count = count // 2
         session2_count = count - session1_count
-        session1_start = sample_hour() * 60 + random.randint(0, 30)
+        session1_start = sample_hour(profile) * 60 + random.randint(0, 30)
         session1_start = max(7 * 60, min(session1_start, 20 * 60))
         gap = random.randint(120, 240)  # 2-4 hours gap
         session2_start = session1_start + gap
@@ -239,7 +292,7 @@ def generate_commit_times(count: int, mode: str) -> list[str]:
     else:
         for _ in range(count):
             for _attempt in range(50):
-                h = sample_hour()
+                h = sample_hour(profile)
                 m_offset = random.randint(-23, 23)
                 m = h * 60 + m_offset
                 if minutes_ok(m):
@@ -299,27 +352,51 @@ def pick_unique_messages(
     history_msgs: list[str],
     message_pool: dict,
     threshold: float = SIMILARITY_THRESHOLD,
+    profile: dict | None = None,
 ) -> list[str]:
     """
     Pick `count` unique messages from the pool that pass semantic check.
-    Categories are rotated to ensure diversity (PRD 6.3 signal 4).
+    When a pattern profile is available, categories are weighted by the user's
+    real prefix_ratios so the generated messages match their natural style.
+    Falls back to uniform rotation when profile is absent.
     """
     categories = list(message_pool.get("categories", {}).keys())
     if not categories:
         raise ValueError("message_pool.json has no categories")
 
+    # Build category weights from profile prefix_ratios
+    if profile and profile.get("prefix_ratios"):
+        ratios = profile["prefix_ratios"]
+        cat_weights = []
+        for cat in categories:
+            # ai_generated gets the highest weight; others match their prefix ratio
+            if cat == "ai_generated":
+                cat_weights.append(10.0)
+            else:
+                cat_weights.append(float(ratios.get(cat, 0.05)) * 100 + 1)
+        use_weighted = True
+    else:
+        cat_weights = [1.0] * len(categories)
+        use_weighted = False
+
     selected = []
     used_in_this_run: list[str] = []
     session_msgs = history_msgs + []
-    random.shuffle(categories)
+
+    if not use_weighted:
+        random.shuffle(categories)
 
     attempts = 0
     cat_index = 0
 
     while len(selected) < count and attempts < 500:
         attempts += 1
-        cat = categories[cat_index % len(categories)]
-        cat_index += 1
+        if use_weighted:
+            cat = random.choices(categories, weights=cat_weights, k=1)[0]
+        else:
+            cat = categories[cat_index % len(categories)]
+            cat_index += 1
+
         pool = message_pool["categories"].get(cat, [])
         if not pool:
             continue
@@ -385,19 +462,27 @@ def update_streak_stats(history: dict, stats: dict, today_count: int) -> dict:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    print("[AutoCommit] Pattern Engine v1.0 starting...")
+    print("[AutoCommit] Pattern Engine v1.1 starting...")
 
     config        = load_config()
     history       = load_json(HISTORY_FILE)
     streak_stats  = load_json(STREAK_FILE)
     message_pool  = load_json(MSG_POOL_FILE)
+    profile       = load_profile()   # may be {} if pattern_profile.json not yet generated
+
+    if profile:
+        print(f"[AutoCommit] Pattern profile loaded — "
+              f"{profile.get('commits_analysed', 0)} commits analysed, "
+              f"peak day: {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][profile.get('peak_weekday', 1)]}")
+    else:
+        print("[AutoCommit] No pattern_profile.json found — using defaults.")
 
     # Prune old history entries
     history = prune_history(history)
 
     # Determine today's mode
-    mode = select_mode(config, history)
-    count = commit_count_for_mode(mode, config)
+    mode  = select_mode(config, history)
+    count = commit_count_for_mode(mode, config, profile)
 
     print(f"[AutoCommit] Mode: {mode} | Commits planned: {count}")
 
@@ -449,13 +534,13 @@ def main() -> None:
         print("[AutoCommit] Using static message_pool.json only.")
 
     # ── Step 3: Pick unique messages with 180-day semantic check ─────────────
-    messages = pick_unique_messages(count, history_msgs, merged_pool, threshold)
+    messages = pick_unique_messages(count, history_msgs, merged_pool, threshold, profile)
     if not messages:
         print("[ERROR] No unique messages available. Exiting.", file=sys.stderr)
         sys.exit(1)
 
-    # Generate commit times
-    times = generate_commit_times(len(messages), mode)
+    # Generate commit times (profile-aware)
+    times = generate_commit_times(len(messages), mode, profile)
 
     # Build commit plan
     commits = [
