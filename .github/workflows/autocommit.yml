@@ -19,6 +19,9 @@ on:
     # Monthly Exam Prompt — 1st of every month at 9:00am IST = 03:30 UTC
     - cron: '30 3 1 * *'
 
+    # Network Miss Follow-up — every 8 hours to send pending Telegram follow-ups
+    - cron: '0 */8 * * *'
+
   workflow_dispatch:
     inputs:
       EXAM_DAYS_THIS_MONTH:
@@ -280,6 +283,7 @@ jobs:
     name: AutoCommit Engine
     runs-on: ubuntu-latest
     needs: decide
+    timeout-minutes: 150
     if: >
       needs.decide.outputs.run_type == 'commit' ||
       needs.decide.outputs.run_type == 'force_commit'
@@ -399,7 +403,9 @@ jobs:
           cp ../scripts/pattern_engine.py .
           cp ../scripts/ai_commit_generator.py .
           cp ../scripts/indian_calendar.py .
-          cp ../scripts/mood_messages.json .
+          cp ../scripts/network_guard.py .
+          cp ../scripts/telegram_notifier.py .
+          cp ../scripts/mood_messages.json . 2>/dev/null || true
           python pattern_engine.py
           
           # Show plan
@@ -592,4 +598,117 @@ jobs:
           print(f'Streak: {s.get(\"current_streak\",0)} days (longest: {s.get(\"longest_streak\",0)})')
           print(f'Total:  {s.get(\"total_commits\",0):,} commits')
           "
+          fi
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # JOB 5: Network Miss Follow-up Notifications (every 8 hours)
+  # ══════════════════════════════════════════════════════════════════════════
+  network_miss_followup:
+    name: Network Miss Follow-up
+    runs-on: ubuntu-latest
+    # Runs on the 8-hourly cron only (not on dispatch / other crons)
+    if: github.event_name == 'schedule'
+    steps:
+      - name: Checkout project repo
+        uses: actions/checkout@v4
+
+      - name: Checkout archive repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/commit-archive
+          token: ${{ secrets.ARCHIVE_REPO_PAT }}
+          path: archive
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Send pending follow-up notifications
+        working-directory: archive
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          GH_USERNAME:        ${{ vars.GH_USERNAME }}
+          ARCHIVE_REPO_PAT:   ${{ secrets.ARCHIVE_REPO_PAT }}
+          ARCHIVE_REPO:       commit-archive
+        run: |
+          cp ../scripts/telegram_notifier.py .
+
+          python3 << 'EOF'
+          import json
+          import datetime
+          import sys
+          from pathlib import Path
+
+          IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+          PENDING_FILE = "pending_notifications.json"
+
+          if not Path(PENDING_FILE).exists():
+              print("No pending_notifications.json — nothing to do.")
+              sys.exit(0)
+
+          with open(PENDING_FILE) as f:
+              pending = json.load(f)
+
+          if not pending.get("active"):
+              print("No active network miss notifications pending.")
+              sys.exit(0)
+
+          sent = pending.get("notifications_sent", 0)
+          if sent >= 3:
+              pending["active"] = False
+              with open(PENDING_FILE, "w") as f:
+                  json.dump(pending, f, indent=2)
+              print("All 3 notifications already sent — marking inactive.")
+              sys.exit(0)
+
+          now    = datetime.datetime.now(IST)
+          times  = pending.get("notify_times", [])
+          miss   = pending.get("miss_date", "unknown")
+
+          # Determine which notification index we should send next
+          next_idx = sent  # 0-indexed: notification 0 = immediate (already sent), 1 = 8h, 2 = 16h
+          if next_idx >= len(times):
+              print("All notify_times exhausted.")
+              sys.exit(0)
+
+          target_time = datetime.datetime.fromisoformat(times[next_idx])
+          if now < target_time:
+              remaining = int((target_time - now).total_seconds() / 60)
+              print(f"Not yet time for notification {next_idx + 1}/3 — {remaining}min remaining.")
+              sys.exit(0)
+
+          # Send the follow-up
+          notif_number = next_idx + 1  # 1-indexed for display
+          from telegram_notifier import send_network_miss_followup
+          ok = send_network_miss_followup(miss, notif_number)
+
+          pending["notifications_sent"] = sent + 1
+          if pending["notifications_sent"] >= 3:
+              pending["active"] = False
+              print("All 3 notifications sent — marking inactive.")
+
+          with open(PENDING_FILE, "w") as f:
+              json.dump(pending, f, indent=2)
+          print(f"Follow-up {notif_number}/3 sent: {ok}")
+          EOF
+
+      - name: Push updated pending_notifications.json
+        working-directory: archive
+        run: |
+          git config user.email "${{ secrets.COMMIT_EMAIL }}"
+          git config user.name "${{ secrets.COMMIT_NAME }}"
+          git remote set-url origin https://x-access-token:${{ secrets.ARCHIVE_REPO_PAT }}@github.com/${{ github.repository_owner }}/commit-archive.git
+          git add pending_notifications.json 2>/dev/null || true
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: update pending_notifications after follow-up [skip ci]"
+            git pull --rebase origin main && git push origin main
+          else
+            echo "No changes to pending_notifications.json."
           fi

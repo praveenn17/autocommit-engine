@@ -33,6 +33,14 @@ try:
 except ImportError:
     MOOD_ENGINE_AVAILABLE = False
 
+# Network guard — imported lazily, pattern engine runs normally without it
+try:
+    from network_guard import run_with_network_guard
+    NETWORK_GUARD_AVAILABLE = True
+except ImportError:
+    NETWORK_GUARD_AVAILABLE = False
+    print("[AutoCommit] ⚠️  network_guard not available — commits will run without retry logic.")
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -544,23 +552,39 @@ def main() -> None:
         "occasion": mood_result.get("occasion", ""),
         "commits": commits,
     }
-    save_json("commit_plan.json", plan)
 
-    # Update history with today's messages
-    today = today_str()
-    history.setdefault(today, [])
-    for c in commits:
-        history[today].append(c["message"])
+    def _save_plan_and_history() -> None:
+        """Callable passed to run_with_network_guard — saves plan + history atomically."""
+        save_json("commit_plan.json", plan)
 
-    save_json(HISTORY_FILE, history)
+        # Update history with today's messages
+        today = today_str()
+        history.setdefault(today, [])
+        for c in commits:
+            history[today].append(c["message"])
 
-    # Update streak stats
-    streak_stats = update_streak_stats(history, streak_stats, len(commits))
-    save_json(STREAK_FILE, streak_stats)
+        save_json(HISTORY_FILE, history)
 
-    print(f"[AutoCommit] Plan saved: {len(commits)} commits scheduled.")
-    for c in commits:
-        print(f"  [{c['time']} IST] {c['message']}")
+        # Update streak stats
+        updated_streak = update_streak_stats(history, streak_stats, len(commits))
+        save_json(STREAK_FILE, updated_streak)
+
+        print(f"[AutoCommit] Plan saved: {len(commits)} commits scheduled.")
+        for c in commits:
+            print(f"  [{c['time']} IST] {c['message']}")
+
+    # ── Step 4: Execute via network guard (with retry logic) ─────────────────
+    if NETWORK_GUARD_AVAILABLE:
+        result = run_with_network_guard(_save_plan_and_history, max_retries=4)
+        if result["success"]:
+            print(f"[AutoCommit] ✅ Network guard: success after {result['attempts']} attempt(s).")
+        else:
+            print(f"[AutoCommit] ❌ Network guard: failed after {result['attempts']} attempt(s) "
+                  f"— see streak_stats.json for the network_miss entry.")
+            sys.exit(0)  # Exit cleanly — handle_network_failure() already ran
+    else:
+        # No network guard — run directly
+        _save_plan_and_history()
 
 
 if __name__ == "__main__":

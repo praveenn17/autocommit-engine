@@ -527,5 +527,96 @@ def main() -> None:
     print("[TGNotifier] Done.")
 
 
+# ---------------------------------------------------------------------------
+# Network Miss Alerts (Feature 4 — VPN-Aware Scheduling)
+# ---------------------------------------------------------------------------
+
+def send_network_miss_alert(miss_date: str, attempt_count: int) -> bool:
+    """
+    Send an immediate Telegram alert when all network retry attempts are exhausted.
+
+    Args:
+        miss_date:     ISO date string of the miss, e.g. "2025-06-20"
+        attempt_count: Number of retry attempts made before giving up
+    """
+    token   = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+
+    if not token or not chat_id:
+        print("[TGNotifier] ⚠️  TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set — skip alert.",
+              file=sys.stderr)
+        return False
+
+    try:
+        date_obj    = datetime.date.fromisoformat(miss_date)
+        display     = date_obj.strftime("%B %-d, %Y")
+    except Exception:
+        display = miss_date
+
+    # Build the backoff summary string
+    backoff_summary = " → ".join(["5min", "15min", "30min", "60min"][:attempt_count])
+
+    message = (
+        "🚨 *AutoCommit Network Miss*\n\n"
+        f"GitHub was unreachable after *{attempt_count} retry attempts* "
+        f"({backoff_summary}).\n"
+        f"Today's commits were *NOT* made.\n\n"
+        "⚠️ Your streak may be at risk.\n\n"
+        "Dashboard will show a warning for the next 24 hours.\n"
+        "Check your internet connection and VPN status."
+    )
+
+    try:
+        ok = send_telegram_message(token, chat_id, message)
+        if ok:
+            print(f"[TGNotifier] 🚨 Network miss alert sent for {miss_date}.")
+        else:
+            print(f"[TGNotifier] ⚠️  Network miss alert failed to send.", file=sys.stderr)
+        return ok
+    except Exception as e:
+        print(f"[TGNotifier] ⚠️  Exception sending network miss alert: {e}", file=sys.stderr)
+        return False
+
+
+def send_network_miss_followup(miss_date: str, notification_number: int) -> bool:
+    """
+    Send a follow-up reminder (2/3 or 3/3) after a network miss.
+
+    Args:
+        miss_date:            ISO date string, e.g. "2025-06-20"
+        notification_number:  Which follow-up this is (2 or 3)
+    """
+    token   = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+
+    if not token or not chat_id:
+        print("[TGNotifier] ⚠️  TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set — skip follow-up.",
+              file=sys.stderr)
+        return False
+
+    try:
+        date_obj = datetime.date.fromisoformat(miss_date)
+        display  = date_obj.strftime("%B %-d, %Y")
+    except Exception:
+        display = miss_date
+
+    message = (
+        f"⚠️ *AutoCommit Reminder ({notification_number}/3)*\n\n"
+        f"Network miss from *{display}* — commits were not made.\n\n"
+        "Check dashboard for details and verify your connection."
+    )
+
+    try:
+        ok = send_telegram_message(token, chat_id, message)
+        if ok:
+            print(f"[TGNotifier] ⚠️  Follow-up {notification_number}/3 sent for {miss_date}.")
+        else:
+            print(f"[TGNotifier] ⚠️  Follow-up {notification_number}/3 failed.", file=sys.stderr)
+        return ok
+    except Exception as e:
+        print(f"[TGNotifier] ⚠️  Exception in follow-up {notification_number}: {e}", file=sys.stderr)
+        return False
+
+
 if __name__ == "__main__":
     main()
