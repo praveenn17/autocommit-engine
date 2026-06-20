@@ -374,6 +374,23 @@ def send_telegram_document(
 # Main Entry Point
 # ---------------------------------------------------------------------------
 
+def send_exam_month_prompt(token: str, chat_id: str) -> None:
+    """Send the 1st-of-month prompt asking for exam days."""
+    next_month = (now_ist().replace(day=28) + datetime.timedelta(days=4)).strftime("%B %Y")
+    # Actually, the user asked to send it on the 1st of the new month, so it's the current month
+    current_month = now_ist().strftime("%B %Y")
+    
+    msg = f"""📅 *New month!* ({current_month})
+    
+How many exam/study days this month? Reply with a number (0–25).
+Send your reply to: https://github.com/praveenn17/autocommit-engine/actions
+→ Run workflow → set `EXAM_DAYS_THIS_MONTH` input"""
+
+    ok = send_telegram_message(token, chat_id, msg)
+    if ok:
+        print(f"[TGNotifier] Exam prompt for {current_month} sent successfully.")
+
+
 def build_weekly_message(
     stats: dict,
     quality: dict,
@@ -426,6 +443,7 @@ def main() -> None:
     """Main entry point — called by GitHub Actions on Tuesdays."""
     is_test = "--test" in sys.argv
     is_streak_warning = "--streak-warning" in sys.argv
+    is_exam_prompt = "--exam-prompt" in sys.argv
 
     # Load secrets from environment
     token    = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -444,6 +462,11 @@ def main() -> None:
     stats   = load_json(STREAK_FILE)
     quality = load_json(QUALITY_FILE)
     config  = load_json(CONFIG_FILE)
+
+    # ── Exam Month Prompt ───────────────────────────────────────────────────
+    if is_exam_prompt:
+        send_exam_month_prompt(token, chat_id)
+        return
 
     # ── Streak Break Warning ────────────────────────────────────────────────
     if is_streak_warning:

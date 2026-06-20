@@ -16,15 +16,25 @@ on:
     # Pattern learner — every Monday at 6:00am IST = Monday 00:30 UTC
     - cron: '30 0 * * 1'
 
+    # Monthly Exam Prompt — 1st of every month at 9:00am IST = 03:30 UTC
+    - cron: '30 3 1 * *'
+
   workflow_dispatch:
     inputs:
+      EXAM_DAYS_THIS_MONTH:
+        description: 'Exam/study days this month (0-25). Leave blank if not setting.'
+        required: false
+        default: ''
+      SETUP_INTENSITY:
+        description: 'One-time setup: commit intensity HIGH / MEDIUM / LOW'
+        required: false
+        default: ''
+      DEBUG_MODE:
+        description: 'Run without making real commits'
+        required: false
+        default: 'false'
       force_commit:
         description: 'Force a manual commit now (ignores sick day / mode)'
-        required: false
-        default: false
-        type: boolean
-      debug_mode:
-        description: 'Run in debug mode (dry run — no actual commits)'
         required: false
         default: false
         type: boolean
@@ -62,7 +72,14 @@ jobs:
           IS_TUESDAY="false"
           IS_STREAK_WARNING="false"
           IS_MONDAY_LEARN="false"
+          IS_MONTHLY_PROMPT="false"
           RUN_TYPE="commit"
+
+          # 1st of month 9am IST window: 8:45–9:15
+          DAY_OF_MONTH=$(TZ=Asia/Kolkata date +%d)
+          if [[ "$DAY_OF_MONTH" == "01" && "$TIME_MIN" -ge 525 && "$TIME_MIN" -le 555 ]]; then
+            IS_MONTHLY_PROMPT="true"
+          fi
           
           # Monday 6am IST window: 5:45–6:15 (345–375 minutes)
           if [[ "$DOW" == "1" && "$TIME_MIN" -ge 345 && "$TIME_MIN" -le 375 ]]; then
@@ -82,7 +99,7 @@ jobs:
           fi
           
           # Manual trigger always commits
-          if [[ "$FORCE" == "true" ]]; then
+          if [[ "$FORCE" == "true" || "${{ github.event.inputs.EXAM_DAYS_THIS_MONTH }}" != "" ]]; then
             RUN_TYPE="force_commit"
           fi
           
@@ -90,6 +107,7 @@ jobs:
           echo "is_tuesday=$IS_TUESDAY"               >> $GITHUB_OUTPUT
           echo "is_streak_warning=$IS_STREAK_WARNING" >> $GITHUB_OUTPUT
           echo "is_monday_learn=$IS_MONDAY_LEARN"     >> $GITHUB_OUTPUT
+          echo "is_monthly_prompt=$IS_MONTHLY_PROMPT" >> $GITHUB_OUTPUT
           echo "force_commit=$FORCE"                  >> $GITHUB_OUTPUT
 
   # ══════════════════════════════════════════════════════════════════════════
@@ -128,6 +146,35 @@ jobs:
         run: |
           cp ../scripts/telegram_notifier.py .
           python telegram_notifier.py --streak-warning
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # JOB 2b: Monthly Exam Prompt (1st of month 9am IST)
+  # ══════════════════════════════════════════════════════════════════════════
+  monthly_prompt:
+    name: Monthly Exam Prompt
+    runs-on: ubuntu-latest
+    needs: decide
+    if: needs.decide.outputs.is_monthly_prompt == 'true'
+    steps:
+      - name: Checkout project repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install requests reportlab
+
+      - name: Send exam prompt
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          cp ../scripts/telegram_notifier.py . || cp scripts/telegram_notifier.py .
+          python telegram_notifier.py --exam-prompt
 
   # ══════════════════════════════════════════════════════════════════════════
   # JOB 3: Weekly Telegram Report (every Tuesday 9am IST)
@@ -197,6 +244,36 @@ jobs:
           python scripts/pattern_learner.py
 
   # ══════════════════════════════════════════════════════════════════════════
+  # JOB 3c: Setup Wizard
+  # ══════════════════════════════════════════════════════════════════════════
+  setup_wizard:
+    name: Setup Wizard
+    runs-on: ubuntu-latest
+    if: github.event.inputs.SETUP_INTENSITY != ''
+    steps:
+      - name: Checkout project repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run Setup Wizard
+        env:
+          SETUP_INTENSITY:    ${{ github.event.inputs.SETUP_INTENSITY }}
+          GH_USERNAME:        ${{ vars.GH_USERNAME }}
+          ARCHIVE_REPO_PAT:   ${{ secrets.ARCHIVE_REPO_PAT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/setup_wizard.py
+
+
+  # ══════════════════════════════════════════════════════════════════════════
   # JOB 4: Main Auto-Commit Job
   # ══════════════════════════════════════════════════════════════════════════
   autocommit:
@@ -264,6 +341,52 @@ jobs:
         run: |
           echo "AutoCommit system is DISABLED via config.json. Exiting."
           exit 0
+
+      # ── Set Exam Days ─────────────────────────────────────────────────────
+      - name: Generate exam dates
+        if: github.event.inputs.EXAM_DAYS_THIS_MONTH != ''
+        working-directory: archive
+        run: |
+          python -c "
+          import json, random, datetime, sys
+          try:
+              days = int('${{ github.event.inputs.EXAM_DAYS_THIS_MONTH }}')
+              if not (0 <= days <= 25): raise ValueError()
+          except:
+              print('Invalid EXAM_DAYS_THIS_MONTH')
+              sys.exit(0)
+          
+          today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5,minutes=30)))
+          year, month = today.year, today.month
+          
+          # Find all non-Sundays in the month
+          valid_dates = []
+          d = datetime.date(year, month, 1)
+          while d.month == month:
+              if d.weekday() != 6:  # 6 is Sunday
+                  valid_dates.append(d)
+              d += datetime.timedelta(days=1)
+          
+          # Weight mid/end of month heavier
+          weights = [1.5 if day.day > 10 else 1.0 for day in valid_dates]
+          exam_dates = random.choices(valid_dates, weights=weights, k=min(days, len(valid_dates)))
+          exam_dates = sorted(list(set(exam_dates))) # unique and sorted
+          
+          while len(exam_dates) < min(days, len(valid_dates)):
+              extra = random.choice([x for x in valid_dates if x not in exam_dates])
+              exam_dates.append(extra)
+              exam_dates.sort()
+          
+          config = {
+              'month': today.strftime('%Y-%m'),
+              'exam_days': len(exam_dates),
+              'set_at': today.date().isoformat(),
+              'exam_dates': [d.isoformat() for d in exam_dates]
+          }
+          with open('monthly_config.json', 'w') as f:
+              json.dump(config, f, indent=2)
+          print(f'✅ Set {len(exam_dates)} exam dates for {config[\"month\"]}')
+          "
 
       # ── Run pattern engine ────────────────────────────────────────────────
       - name: Run pattern engine (determine commits)
@@ -395,7 +518,7 @@ jobs:
         if: steps.mode.outputs.mode != 'Rest'
         working-directory: archive
         env:
-          DEBUG_MODE: ${{ github.event.inputs.debug_mode }}
+          DEBUG_MODE: ${{ github.event.inputs.DEBUG_MODE }}
         run: |
           if [[ "$DEBUG_MODE" == "true" ]]; then
             echo "[DEBUG] Skipping push in debug mode"
@@ -404,7 +527,7 @@ jobs:
           
           # Stage tracking files
           git add commit_history.json streak_stats.json quality_score.json \
-                  commit_plan.json config.json 2>/dev/null || true
+                  commit_plan.json config.json monthly_config.json 2>/dev/null || true
           
           # Commit tracking files if changed
           if git diff --staged --quiet; then

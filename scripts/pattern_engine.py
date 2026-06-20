@@ -147,80 +147,6 @@ def is_weekend() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Mode Selection (PRD Section 3.4)
-# ---------------------------------------------------------------------------
-
-def select_mode(config: dict, history: dict) -> str:
-    """Determine today's commit mode using PRD probability weights."""
-    if not config.get("active", True):
-        return MODE_REST
-    if is_sick_day(config):
-        return MODE_REST
-    if config.get("weekday_only", False) and is_weekend():
-        return MODE_REST
-
-    today = today_str()
-    yesterday = (now_ist().date() - datetime.timedelta(days=1)).isoformat()
-
-    # After rest day → Quiet mode
-    yesterday_msgs = history.get(yesterday, [])
-    if not yesterday_msgs:
-        return MODE_QUIET
-
-    # Burst mode disabled → cap at Normal
-    if not config.get("burst_mode", True):
-        r = random.random()
-        return MODE_QUIET if r < 0.25 else MODE_NORMAL
-
-    # Full probability draw
-    r = random.random()
-    if r < 0.12:
-        return MODE_REST
-    elif r < 0.12 + 0.25:
-        return MODE_QUIET
-    elif r < 0.12 + 0.25 + 0.60:
-        return MODE_NORMAL
-    else:
-        return MODE_BURST
-
-
-def commit_count_for_mode(mode: str, config: dict, profile: dict | None = None) -> int:
-    """
-    Return number of commits for the selected mode.
-    When a pattern profile is available, the Normal/Burst counts are drawn
-    from the user's real commits_per_active_day distribution.
-    """
-    if mode == MODE_REST:
-        return 0
-    if mode == MODE_QUIET:
-        return 1
-
-    # Use profile distribution when available
-    if profile and mode in (MODE_NORMAL, MODE_BURST):
-        dist = profile.get("commits_per_active_day", {})
-        choices  = ["1", "2", "3", "4+"]
-        weights  = [float(dist.get(k, 0.0)) for k in choices]
-        if sum(weights) > 0:
-            drawn = random.choices(choices, weights=weights, k=1)[0]
-            if mode == MODE_NORMAL:
-                # For Normal, cap at 3
-                return min(int(drawn.replace("+", "")), 3) if drawn != "4+" else 3
-            else:
-                # For Burst, draw is >=4
-                return max(4, int(drawn.replace("+", ""))) if drawn == "4+" \
-                    else random.randint(4, min(config.get("commits_per_day", 7), 7))
-
-    # Legacy config-based fallback
-    if mode == MODE_NORMAL:
-        cap = min(config.get("commits_per_day", 3), 3)
-        return random.randint(2, cap) if cap >= 2 else 1
-    elif mode == MODE_BURST:
-        cap = min(config.get("commits_per_day", 7), 7)
-        return random.randint(4, max(4, cap))
-    return 1
-
-
-# ---------------------------------------------------------------------------
 # Timing Engine (PRD Section 3.2)
 # ---------------------------------------------------------------------------
 
@@ -487,9 +413,9 @@ def main() -> None:
 
     # ── Step 0: Evaluate today's mood (Indian Calendar) ──────────────────────
     # Must run BEFORE mode selection so multiplier can adjust the commit count.
-    mood_result = {"mood": "normal", "commit_multiplier": 1.0,
+    mood_result = {"mood": "normal",
                    "skip_probability": 0.15, "message_category": None,
-                   "occasion": "", "log": ""}
+                   "occasion": "", "commits_range": [1, 3], "log": ""}
     try:
         if MOOD_ENGINE_AVAILABLE:
             mood_override = config.get("mood_override", None)
@@ -520,18 +446,21 @@ def main() -> None:
     # Prune old history entries
     history = prune_history(history)
 
-    # Determine today's mode
-    mode  = select_mode(config, history)
-    count = commit_count_for_mode(mode, config, profile)
+    # Apply mood range to get today's count
+    c_range = mood_result.get("commits_range", [1, 3])
+    count = random.randint(c_range[0], c_range[1])
 
-    # Apply mood commit_multiplier to count
-    multiplier = mood_result.get("commit_multiplier", 1.0)
-    if multiplier != 1.0:
-        count = max(0, int(count * multiplier))
-        print(f"[AutoCommit] 🎭 Mood '{mood_result['mood']}' (×{multiplier}) → "
-              f"adjusted count: {count}")
+    # Assign a mode string based on count (for timing spacing logic)
+    if count == 0:
+        mode = MODE_REST
+    elif count == 1:
+        mode = MODE_QUIET
+    elif count >= 4:
+        mode = MODE_BURST
+    else:
+        mode = MODE_NORMAL
 
-    print(f"[AutoCommit] Mode: {mode} | Commits planned: {count}")
+    print(f"[AutoCommit] Mode: {mode} | Commits planned: {count} (from range {c_range})")
 
     if mode == MODE_REST or count == 0:
         # Write empty plan — workflow will skip committing
