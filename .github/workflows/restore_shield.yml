@@ -1,0 +1,239 @@
+name: Interview Shield Restore
+
+# This workflow lives in commit-archive and keeps running even when
+# autocommit-engine is fully destroyed.
+
+on:
+  schedule:
+    - cron: '0 1 * * *'   # Daily 6:30am IST (UTC+5:30 = UTC 01:00)
+  workflow_dispatch:
+    inputs:
+      force_restore:
+        description: 'Force restore immediately regardless of date'
+        required: false
+        default: 'false'
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  restore_check:
+    name: Interview Shield Restore Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout commit-archive
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Check and restore engine if interview passed
+        env:
+          ARCHIVE_REPO_PAT:   ${{ secrets.ARCHIVE_REPO_PAT }}
+          GH_USERNAME:        ${{ vars.GH_USERNAME }}
+          ARCHIVE_REPO:       commit-archive
+          ENGINE_REPO:        autocommit-engine
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          FORCE_RESTORE:      ${{ github.event.inputs.force_restore }}
+        run: |
+          python3 << 'PYEOF'
+          import json
+          import os
+          import sys
+          import datetime
+          import base64
+
+          try:
+              import requests
+          except ImportError:
+              print("[Restore] requests not installed", file=sys.stderr)
+              sys.exit(1)
+
+          IST        = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+          GITHUB_API = "https://api.github.com"
+          TG_BASE    = "https://api.telegram.org/bot{token}/sendMessage"
+
+          pat          = os.environ.get("ARCHIVE_REPO_PAT", "").strip()
+          gh_user      = os.environ.get("GH_USERNAME", "").strip()
+          archive_name = os.environ.get("ARCHIVE_REPO", "commit-archive").strip()
+          engine_name  = os.environ.get("ENGINE_REPO", "autocommit-engine").strip()
+          force        = os.environ.get("FORCE_RESTORE", "false").lower() == "true"
+
+          if not pat or not gh_user:
+              print("[Restore] ❌ GH_USERNAME / ARCHIVE_REPO_PAT missing", file=sys.stderr)
+              sys.exit(1)
+
+          archive_repo = f"{gh_user}/{archive_name}"
+          engine_repo  = f"{gh_user}/{engine_name}"
+          today        = datetime.datetime.now(IST).date()
+
+          def gh_headers():
+              return {
+                  "Authorization": f"token {pat}",
+                  "Accept":        "application/vnd.github.v3+json",
+                  "Content-Type":  "application/json",
+              }
+
+          def get_file(repo, path):
+              try:
+                  r = requests.get(
+                      f"{GITHUB_API}/repos/{repo}/contents/{path}",
+                      headers=gh_headers(), timeout=15)
+                  if r.status_code == 404:
+                      return None, None
+                  r.raise_for_status()
+                  d = r.json()
+                  return d.get("content", ""), d.get("sha")
+              except Exception as e:
+                  print(f"[Restore] ⚠️  GET {path}: {e}", file=sys.stderr)
+                  return None, None
+
+          def put_file(repo, path, content_b64, sha, message):
+              try:
+                  body = {"message": message, "content": content_b64}
+                  if sha:
+                      body["sha"] = sha
+                  r = requests.put(
+                      f"{GITHUB_API}/repos/{repo}/contents/{path}",
+                      headers=gh_headers(), json=body, timeout=15)
+                  r.raise_for_status()
+                  return True
+              except Exception as e:
+                  print(f"[Restore] ⚠️  PUT {path}: {e}", file=sys.stderr)
+                  return False
+
+          def list_dir(repo, path):
+              try:
+                  r = requests.get(
+                      f"{GITHUB_API}/repos/{repo}/contents/{path}",
+                      headers=gh_headers(), timeout=15)
+                  if r.status_code == 404:
+                      return []
+                  r.raise_for_status()
+                  return [i for i in r.json() if i.get("type") == "file"]
+              except Exception as e:
+                  print(f"[Restore] ⚠️  LIST {path}: {e}", file=sys.stderr)
+                  return []
+
+          def send_telegram(message):
+              token   = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+              chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+              if not token or not chat_id:
+                  return
+              try:
+                  requests.post(
+                      TG_BASE.format(token=token),
+                      json={"chat_id": chat_id, "text": message, "parse_mode": "Markdown"},
+                      timeout=15)
+              except Exception as e:
+                  print(f"[Restore] ⚠️  Telegram: {e}", file=sys.stderr)
+
+          # ── Load interviews.json ───────────────────────────────────────────
+          content, iv_sha = get_file(archive_repo, "interviews.json")
+          if content is None:
+              print("[Restore] interviews.json not found — nothing to restore.")
+              sys.exit(0)
+
+          try:
+              data = json.loads(base64.b64decode(content.replace("\n","")).decode("utf-8"))
+          except Exception as e:
+              print(f"[Restore] ❌ Could not parse interviews.json: {e}", file=sys.stderr)
+              sys.exit(1)
+
+          interviews = data.get("interviews", [])
+          now_ist    = datetime.datetime.now(IST)
+
+          restored_any = False
+          for iv in interviews:
+              status     = iv.get("status", "scheduled")
+              restore_on = iv.get("restore_on", "")
+              company    = iv.get("company", "Unknown")
+
+              if status != "destroyed":
+                  continue
+              if not restore_on:
+                  continue
+
+              try:
+                  restore_date = datetime.date.fromisoformat(restore_on)
+              except Exception:
+                  continue
+
+              if not force and today < restore_date:
+                  days_left = (restore_date - today).days
+                  print(f"[Restore] ⏳ {company}: restore in {days_left}d (on {restore_on})")
+                  continue
+
+              print(f"[Restore] 🟢 {company}: restore day! Reading backup files...")
+              iv["status"]      = "active"
+              iv["restored_at"] = now_ist.isoformat()
+              restored_any      = True
+
+              # ── Restore all backed-up files ────────────────────────────────
+              backup_files = list_dir(archive_repo, "backup/.github/workflows")
+              backup_files += list_dir(archive_repo, "backup/scripts")
+
+              restored_count = 0
+              for bf in backup_files:
+                  # bf["path"] = e.g. "backup/scripts/pattern_engine.py"
+                  src_path = bf["path"]  # in archive
+                  # Strip "backup/" prefix to get engine repo path
+                  engine_path = src_path[len("backup/"):]
+
+                  content_b64, _ = get_file(archive_repo, src_path)
+                  if content_b64 is None:
+                      print(f"[Restore] ⚠️  Could not read backup: {src_path}", file=sys.stderr)
+                      continue
+
+                  # Clean base64 content (remove newlines GitHub adds)
+                  clean_b64 = content_b64.replace("\n", "")
+
+                  # Check if file already exists in engine (need SHA for update)
+                  _, existing_sha = get_file(engine_repo, engine_path)
+
+                  ok = put_file(engine_repo, engine_path, clean_b64, existing_sha,
+                                f"shield: restore {engine_path} after interview [skip ci]")
+                  if ok:
+                      print(f"[Restore] ✅ Restored: {engine_path}")
+                      restored_count += 1
+                  else:
+                      print(f"[Restore] ❌ Failed to restore: {engine_path}", file=sys.stderr)
+
+              print(f"[Restore] 🟢 {company}: {restored_count} files restored.")
+
+              # ── Telegram notification ──────────────────────────────────────
+              try:
+                  iv_display = datetime.date.fromisoformat(iv.get("date","")).strftime("%-d %B, %Y")
+              except Exception:
+                  iv_display = iv.get("date", "")
+
+              send_telegram(
+                  "🟢 *AutoCommit Restored\\!*\n\n"
+                  f"Interview for *{company}* on {iv_display} is over\\.\n\n"
+                  f"{restored_count} files restored to autocommit\\-engine\\.\n"
+                  "Commits will resume on the next scheduled workflow run\\. ✅"
+              )
+
+          # ── Save updated interviews.json ───────────────────────────────────
+          if restored_any:
+              data["system_status"] = "active"
+              new_content = base64.b64encode(
+                  json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
+              ).decode("utf-8")
+              ok = put_file(archive_repo, "interviews.json", new_content, iv_sha,
+                            "shield: mark interviews active after restore [skip ci]")
+              if ok:
+                  print("[Restore] 📝 interviews.json updated → status: active")
+              else:
+                  print("[Restore] ❌ Could not save interviews.json", file=sys.stderr)
+          else:
+              print("[Restore] ✅ No interviews to restore today.")
+
+          PYEOF

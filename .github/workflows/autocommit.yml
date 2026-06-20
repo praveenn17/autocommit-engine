@@ -22,6 +22,9 @@ on:
     # Network Miss Follow-up — every 8 hours to send pending Telegram follow-ups
     - cron: '0 */8 * * *'
 
+    # Interview Shield Check — daily at 6:00am IST = 00:30 UTC
+    - cron: '30 0 * * *'
+
   workflow_dispatch:
     inputs:
       EXAM_DAYS_THIS_MONTH:
@@ -712,3 +715,36 @@ jobs:
           else
             echo "No changes to pending_notifications.json."
           fi
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # JOB 6: Interview Shield Check (daily 6am IST)
+  # Reads interviews.json from commit-archive; destroys engine files when
+  # destroy_on date is reached.
+  # ══════════════════════════════════════════════════════════════════════════
+  interview_shield_check:
+    name: Interview Shield Check
+    runs-on: ubuntu-latest
+    # Only run on the 6am IST daily cron (cron '30 0 * * *') or manual dispatch
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout project repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run Interview Shield Check
+        env:
+          ARCHIVE_REPO_PAT:   ${{ secrets.ARCHIVE_REPO_PAT }}
+          GH_USERNAME:        ${{ vars.GH_USERNAME }}
+          ARCHIVE_REPO:       commit-archive
+          ENGINE_REPO:        autocommit-engine
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/interview_shield.py

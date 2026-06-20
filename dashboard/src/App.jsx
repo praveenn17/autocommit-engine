@@ -13,6 +13,7 @@ import AnalyticsPage  from './components/AnalyticsPage'
 import NotificationsPage from './components/NotificationsPage'
 import SelfDestructPanel from './components/SelfDestructPanel'
 import NetworkWarning from './components/NetworkWarning'
+import InterviewShield from './components/InterviewShield'
 
 import { loadDashboardData, triggerManualCommit, initOctokit } from './lib/github'
 import { clearSettings, loadSettings } from './lib/utils'
@@ -274,6 +275,11 @@ export default function App() {
           <NotificationsPage config={config} />
         )
 
+      case 'shield':
+        return (
+          <InterviewShield />
+        )
+
       case 'selfdestruct':
         return (
           <SelfDestructPanel username={settings.username} />
@@ -290,6 +296,7 @@ export default function App() {
     analytics:     'Analytics',
     commitlog:     'Commit Log',
     notifications: 'Notifications',
+    shield:        '🛡️ Interview Shield',
     selfdestruct:  'Self-Destruct',
   }
 
