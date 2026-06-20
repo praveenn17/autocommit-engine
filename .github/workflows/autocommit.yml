@@ -427,6 +427,17 @@ jobs:
           git config user.name "${{ secrets.COMMIT_NAME }}"
           git remote set-url origin https://x-access-token:${{ secrets.ARCHIVE_REPO_PAT }}@github.com/${{ github.repository_owner }}/commit-archive.git
 
+      # ── Ensure commit-archive .gitignore excludes copied script files ────
+      - name: Ensure .gitignore in archive repo
+        if: steps.mode.outputs.mode != 'Rest'
+        working-directory: archive
+        run: |
+          printf '*.py\n__pycache__/\n.mutation_state\nmood_messages.json\n' > .gitignore
+          git add .gitignore
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: add .gitignore to exclude script artifacts [skip ci]"
+          fi
+
       # ── Execute commits ────────────────────────────────────────────────────
       - name: Execute auto-commits
         if: steps.mode.outputs.mode != 'Rest' && steps.mode.outputs.count != '0'
@@ -479,7 +490,7 @@ jobs:
                   print("  [DEBUG MODE] Skipping actual commit")
                   continue
               
-              # Apply file mutation
+              # 1. Apply file mutation
               result = subprocess.run(
                   ["python3", "file_mutator.py"],
                   capture_output=True, text=True
@@ -488,9 +499,20 @@ jobs:
               if result.returncode != 0:
                   print(f"  [WARN] file_mutator error: {result.stderr}", file=sys.stderr)
               
-              # Stage and commit with IST timestamp
+              # 2. Explicitly stage activity_log.txt
               subprocess.run(["git", "add", "activity_log.txt"], check=True)
               
+              # 3. Check if anything is actually staged before committing
+              status = subprocess.run(
+                  ["git", "status", "--porcelain"],
+                  capture_output=True, text=True
+              )
+              staged_lines = [l for l in status.stdout.splitlines() if l.startswith(("M ", "A ", "D ", "R ", "MM", "AM"))]
+              if not staged_lines:
+                  print(f"  [WARN] Nothing staged for commit {i+1} — file may not have changed. Skipping silently.")
+                  continue
+              
+              # 4. Commit with backdated IST timestamp
               env = {
                   **dict(os.environ),
                   "GIT_AUTHOR_DATE":    git_timestamp,
