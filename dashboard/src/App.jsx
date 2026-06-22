@@ -14,6 +14,7 @@ import NotificationsPage from './components/NotificationsPage'
 import SelfDestructPanel from './components/SelfDestructPanel'
 import NetworkWarning from './components/NetworkWarning'
 import InterviewShield from './components/InterviewShield'
+import NLScheduler from './components/NLScheduler'
 
 import { loadDashboardData, triggerManualCommit, initOctokit } from './lib/github'
 import { clearSettings, loadSettings } from './lib/utils'
@@ -280,6 +281,11 @@ export default function App() {
           <InterviewShield />
         )
 
+      case 'nlscheduler':
+        return (
+          <NLScheduler />
+        )
+
       case 'selfdestruct':
         return (
           <SelfDestructPanel username={settings.username} />
@@ -297,6 +303,7 @@ export default function App() {
     commitlog:     'Commit Log',
     notifications: 'Notifications',
     shield:        '🛡️ Interview Shield',
+    nlscheduler:   '🤖 AI Scheduler',
     selfdestruct:  'Self-Destruct',
   }
 

@@ -1,5 +1,5 @@
 import React from 'react'
-import { Zap, BarChart2, Settings, List, Bell, Skull, CircleDot, ShieldCheck } from 'lucide-react'
+import { Zap, BarChart2, Settings, List, Bell, Skull, CircleDot, ShieldCheck, Bot } from 'lucide-react'
 
 const NAV_ITEMS = [
   { id: 'dashboard',     label: 'Dashboard',     icon: Zap },
@@ -7,8 +7,9 @@ const NAV_ITEMS = [
   { id: 'analytics',     label: 'Analytics',     icon: BarChart2 },
   { id: 'commitlog',     label: 'Commit Log',    icon: List },
   { id: 'notifications', label: 'Notifications', icon: Bell },
-  { id: 'shield',        label: '🛡️ Shield',      icon: ShieldCheck },
-  { id: 'selfdestruct',  label: 'Self-Destruct',  icon: Skull, danger: true },
+  { id: 'shield',        label: '🛡️ Shield',        icon: ShieldCheck },
+  { id: 'nlscheduler',   label: '🤖 AI Scheduler',  icon: Bot },
+  { id: 'selfdestruct',  label: 'Self-Destruct',   icon: Skull, danger: true },
 ]
 
 export default function Sidebar({ activePage, setActivePage, username, systemActive, isMobileOpen, setMobileOpen }) {
