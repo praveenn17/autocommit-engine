@@ -498,7 +498,11 @@ def main() -> None:
         raw_exts = os.environ.get("PROJECT_EXTENSIONS", ".py,.js,.jsx,.json,.yml")
         extensions = parse_extensions(raw_exts)
         print(f"[AutoCommit] Requesting AI messages for extensions: {', '.join(extensions)}")
-        ai_messages = generate_ai_messages(extensions, history_msgs)
+        ai_messages = generate_ai_messages(
+            extensions,
+            history_msgs,
+            repo_dir=os.path.abspath(os.getcwd()),  # archive repo working dir for git diff
+        )
     else:
         print("[AutoCommit] ai_commit_generator not available — using static pool only.")
 

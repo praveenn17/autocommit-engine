@@ -18,6 +18,7 @@ import datetime
 import os
 import random
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -203,6 +204,25 @@ def apply_mutation(mutation_type: str | None = None) -> str:
 
     save_log_lines(lines)
     print(f"[FileMutator] {LOG_FILE} updated ({len(lines)} lines).")
+
+    # Stage the file immediately so git diff --staged is populated
+    # when ai_commit_generator.get_staged_diff() is called next.
+    try:
+        result = subprocess.run(
+            ["git", "add", LOG_FILE],
+            capture_output=True, text=True, check=False
+        )
+        if result.returncode == 0:
+            print(f"[FileMutator] git add {LOG_FILE} ✔")
+        else:
+            print(f"[FileMutator] ⚠️  git add returned code {result.returncode}: {result.stderr.strip()}",
+                  file=sys.stderr)
+    except FileNotFoundError:
+        print("[FileMutator] ⚠️  git not found — skipping git add (non-git environment).",
+              file=sys.stderr)
+    except Exception as e:
+        print(f"[FileMutator] ⚠️  git add failed: {e}", file=sys.stderr)
+
     return mutation_type
 
 
