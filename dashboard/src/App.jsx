@@ -110,6 +110,7 @@ export default function App() {
 
   const handleLogout = useCallback(() => {
     clearSettings()
+    localStorage.removeItem('nl_scheduler_history')
     setSettings(null)
     setCommitHistory({})
     setStreakStats({})
@@ -117,6 +118,7 @@ export default function App() {
     setConfig({})
     setConfigSha(null)
     setBanner('')
+    setActivePage('dashboard')
   }, [])
 
   const handleRefresh = useCallback(async () => {
@@ -331,6 +333,7 @@ export default function App() {
         systemActive={systemActive}
         isMobileOpen={isMobileOpen}
         setMobileOpen={setMobileOpen}
+        onLogout={handleLogout}
       />
 
       {/* Main content */}
