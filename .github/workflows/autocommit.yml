@@ -404,6 +404,7 @@ jobs:
           PROJECT_EXTENSIONS:     ${{ vars.PROJECT_EXTENSIONS || '.py,.js,.jsx,.json,.yml,.sh,.md' }}
         run: |
           cp ../scripts/pattern_engine.py .
+          cp ../scripts/smart_mode.py .
           cp ../scripts/ai_commit_generator.py .
           cp ../scripts/indian_calendar.py .
           cp ../scripts/network_guard.py .

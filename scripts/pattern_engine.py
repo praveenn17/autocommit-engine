@@ -549,7 +549,17 @@ def main() -> None:
         sys.exit(1)
 
     # Generate commit times (Smart Mode)
-    times = get_smart_commit_hours(len(messages), day_number)
+    if SMART_MODE_AVAILABLE:
+        times = get_smart_commit_hours(len(messages), day_number)
+    else:
+        # Simple fallback: spread commits across business hours IST
+        import random
+        base_hours = [9, 11, 14, 16, 19, 21]
+        times = []
+        for i in range(len(messages)):
+            h = base_hours[i % len(base_hours)]
+            m = random.randint(0, 59)
+            times.append(f"{h:02d}:{m:02d}")
 
     # Build commit plan
     commits = [

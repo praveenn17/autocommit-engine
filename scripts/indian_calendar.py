@@ -92,11 +92,14 @@ def fetch_from_github(filename: str) -> dict:
     """Fetch a JSON file from the commit-archive repo via GitHub Contents API."""
     try:
         username = os.environ.get("GH_USERNAME", "").strip()
-        pat = os.environ.get("ARCHIVE_REPO_PAT", "").strip()
+        pat = os.environ.get("ARCHIVE_REPO_PAT", "").strip() or os.environ.get("GH_PAT", "").strip()
         repo = os.environ.get("ARCHIVE_REPO", "commit-archive").strip()
 
-        if not username or not pat:
-            print(f"[IndianCalendar] ⚠️ GitHub API credentials missing for {filename}.", file=sys.stderr)
+        if not pat:
+            print("[IndianCalendar] ⚠️ GitHub API credentials missing — using fallback", file=sys.stderr)
+            return {}
+        if not username:
+            print(f"[IndianCalendar] ⚠️ GitHub username missing for {filename}.", file=sys.stderr)
             return {}
 
         url = f"{GITHUB_API}/repos/{username}/{repo}/contents/{filename}"

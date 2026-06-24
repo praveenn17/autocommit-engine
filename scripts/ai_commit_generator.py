@@ -262,7 +262,12 @@ def _call_gemini_single(prompt: str, api_key: str) -> str:
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
         ],
     }
+    import time
     resp = _req.post(url, json=payload, timeout=GEMINI_TIMEOUT)
+    if resp.status_code == 429:
+        print("[AIGenerator] ⚠️  429 Rate limit hit, waiting 5 seconds before retry...", file=sys.stderr)
+        time.sleep(5)
+        resp = _req.post(url, json=payload, timeout=GEMINI_TIMEOUT)
     resp.raise_for_status()
     data = resp.json()
     text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
@@ -406,7 +411,12 @@ def call_gemini(prompt: str, api_key: str) -> list[str]:
         ],
     }
 
+    import time
     resp = requests.post(url, json=payload, timeout=30)
+    if resp.status_code == 429:
+        print("[AIGenerator] ⚠️  429 Rate limit hit, waiting 5 seconds before retry...", file=sys.stderr)
+        time.sleep(5)
+        resp = requests.post(url, json=payload, timeout=30)
     resp.raise_for_status()
 
     data = resp.json()
@@ -560,12 +570,17 @@ def generate_ai_messages(
                 print("[AIGenerator] 🔍 No staged diff available — using extension fallback.",
                       file=sys.stderr)
         except Exception as e:
+            if "429" in str(e):
+                api_key = None
             print(f"[AIGenerator] ⚠️  Diff path error: {e}", file=sys.stderr)
 
     # ── Path B: Extension-based batch generation (fills remaining slots) ──────
     # Always run if we still need more messages (or if diff path skipped)
     remaining = max(TARGET_COUNT - len(results), 0)
     if remaining > 0 and api_key:
+        import time
+        if results:
+            time.sleep(2)  # delay between sequential Gemini calls
         try:
             stack_desc     = describe_stack(extensions)
             style_examples = extract_style_examples(pool)
