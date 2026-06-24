@@ -20,9 +20,14 @@ from pathlib import Path
 from typing import Any
 
 try:
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from smart_mode import get_smart_commit_count, get_smart_commit_hours, get_gemini_extended_pattern
-except ImportError:
-    pass
+    SMART_MODE_AVAILABLE = True
+except ImportError as e:
+    print(f"[AutoCommit] ⚠️ smart_mode import failed: {e} — using fallback count 2")
+    SMART_MODE_AVAILABLE = False
 
 
 # AI commit generator — imported lazily so the engine still works without it
@@ -436,8 +441,7 @@ def main() -> None:
                    "occasion": "", "log": ""}
     try:
         if MOOD_ENGINE_AVAILABLE:
-            mood_override = config.get("mood_override", None)
-            mood_result = get_today_mood(override=mood_override)
+            mood_result = get_today_mood()
         else:
             print("[AutoCommit] 📅 indian_calendar not available — using normal mood.")
     except Exception as _me:
@@ -450,11 +454,14 @@ def main() -> None:
     day_number = get_total_days_since_launch()
     recent_history = prune_history(history)
     
-    if day_number <= 60:
-        count = get_smart_commit_count(day_number, recent_history)
+    if SMART_MODE_AVAILABLE:
+        if day_number <= 60:
+            count = get_smart_commit_count(day_number, recent_history)
+        else:
+            gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
+            count = get_gemini_extended_pattern(day_number, recent_history, gemini_api_key)
     else:
-        gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
-        count = get_gemini_extended_pattern(day_number, recent_history, gemini_api_key)
+        count = 2  # safe fallback
 
     mood = mood_result.get("mood", "normal")
     if mood == "festival_major" or mood == "exam_season":
