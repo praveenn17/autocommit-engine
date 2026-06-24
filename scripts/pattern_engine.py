@@ -19,6 +19,12 @@ import difflib
 from pathlib import Path
 from typing import Any
 
+try:
+    from smart_mode import get_smart_commit_count, get_smart_commit_hours, get_gemini_extended_pattern
+except ImportError:
+    pass
+
+
 # AI commit generator — imported lazily so the engine still works without it
 try:
     from ai_commit_generator import generate_ai_messages, parse_extensions
@@ -134,20 +140,25 @@ def load_config() -> dict:
     cfg = load_json(CONFIG_FILE)
     defaults = {
         "active": True,
-        "commits_per_day": 3,
         "weekday_only": False,
-        "burst_mode": True,
-        "sick_days_this_month": [],
         "similarity_threshold": SIMILARITY_THRESHOLD,
+        "smart_mode_enabled": True,
+        "launch_date": today_str(),
     }
     for k, v in defaults.items():
         cfg.setdefault(k, v)
     return cfg
 
 
-def is_sick_day(config: dict) -> bool:
-    today = today_str()
-    return today in config.get("sick_days_this_month", [])
+def get_total_days_since_launch() -> int:
+    cfg = load_config()
+    launch_str = cfg.get("launch_date", today_str())
+    try:
+        launch = datetime.datetime.strptime(launch_str, "%Y-%m-%d").date()
+    except ValueError:
+        launch = now_ist().date()
+    delta = (now_ist().date() - launch).days
+    return max(1, delta + 1)
 
 
 def is_weekend() -> bool:
@@ -420,10 +431,9 @@ def main() -> None:
         print("[AutoCommit] No pattern_profile.json found — using defaults.")
 
     # ── Step 0: Evaluate today's mood (Indian Calendar) ──────────────────────
-    # Must run BEFORE mode selection so multiplier can adjust the commit count.
     mood_result = {"mood": "normal",
-                   "skip_probability": 0.15, "message_category": None,
-                   "occasion": "", "commits_range": [1, 3], "log": ""}
+                   "skip_probability": 0.0, "message_category": None,
+                   "occasion": "", "log": ""}
     try:
         if MOOD_ENGINE_AVAILABLE:
             mood_override = config.get("mood_override", None)
@@ -434,31 +444,24 @@ def main() -> None:
         print(f"[AutoCommit] ⚠️  Mood engine error: {_me} — defaulting to normal.",
               file=sys.stderr)
 
-    # Apply skip probability (hard skip of the entire day)
-    skip_p = mood_result.get("skip_probability", 0.15)
-    if random.random() < skip_p:
-        plan = {
-            "date": today_str(),
-            "mode": MODE_REST,
-            "mood": mood_result.get("mood", "normal"),
-            "occasion": mood_result.get("occasion", ""),
-            "commits": [],
-        }
-        save_json("commit_plan.json", plan)
-        print(f"[AutoCommit] 🎭 Mood skip triggered ({mood_result['mood']}, "
-              f"skip_p={skip_p:.2f}) — no commits today.")
-        streak_stats = update_streak_stats(history, streak_stats, 0)
-        save_json(STREAK_FILE, streak_stats)
-        return
-
     # Prune old history entries
     history = prune_history(history)
+    
+    day_number = get_total_days_since_launch()
+    recent_history = prune_history(history)
+    
+    if day_number <= 60:
+        count = get_smart_commit_count(day_number, recent_history)
+    else:
+        gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
+        count = get_gemini_extended_pattern(day_number, recent_history, gemini_api_key)
 
-    # Apply mood range to get today's count
-    c_range = mood_result.get("commits_range", [1, 3])
-    count = random.randint(c_range[0], c_range[1])
+    mood = mood_result.get("mood", "normal")
+    if mood == "festival_major" or mood == "exam_season":
+        count = 0
+    elif mood == "festival_minor":
+        count = min(count, 1)
 
-    # Assign a mode string based on count (for timing spacing logic)
     if count == 0:
         mode = MODE_REST
     elif count == 1:
@@ -468,20 +471,18 @@ def main() -> None:
     else:
         mode = MODE_NORMAL
 
-    print(f"[AutoCommit] Mode: {mode} | Commits planned: {count} (from range {c_range})")
+    print(f"[AutoCommit] Mode: {mode} | Commits planned: {count} (Smart Mode Day {day_number})")
 
-    if mode == MODE_REST or count == 0:
-        # Write empty plan — workflow will skip committing
+    if count == 0:
         plan = {
             "date": today_str(),
             "mode": MODE_REST,
-            "mood": mood_result.get("mood", "normal"),
+            "mood": mood,
             "occasion": mood_result.get("occasion", ""),
             "commits": [],
         }
         save_json("commit_plan.json", plan)
         print("[AutoCommit] Rest day — no commits scheduled.")
-        # Still update streak (break)
         streak_stats = update_streak_stats(history, streak_stats, 0)
         save_json(STREAK_FILE, streak_stats)
         return
@@ -540,8 +541,8 @@ def main() -> None:
         print("[ERROR] No unique messages available. Exiting.", file=sys.stderr)
         sys.exit(1)
 
-    # Generate commit times (profile-aware)
-    times = generate_commit_times(len(messages), mode, profile)
+    # Generate commit times (Smart Mode)
+    times = get_smart_commit_hours(len(messages), day_number)
 
     # Build commit plan
     commits = [

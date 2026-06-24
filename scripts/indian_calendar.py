@@ -59,12 +59,6 @@ HARDCODED_HOLIDAYS = [
     {"name": "Diwali",              "date": "2026-11-08", "major": True},
 ]
 
-# Default intensity settings
-DEFAULT_INTENSITY_SETTINGS = {
-    "HIGH": {"min": 3, "max": 6, "burst_chance": 0.3},
-    "MEDIUM": {"min": 1, "max": 3, "burst_chance": 0.15},
-    "LOW": {"min": 0, "max": 2, "burst_chance": 0.05}
-}
 
 
 # ---------------------------------------------------------------------------
@@ -238,17 +232,6 @@ def get_exam_status_today(date: datetime.date) -> dict:
     return {"is_exam_day": False, "is_exam_week": False}
 
 
-# ---------------------------------------------------------------------------
-# Source 3: User Intensity
-# ---------------------------------------------------------------------------
-
-def get_user_intensity() -> str:
-    """Returns 'HIGH', 'MEDIUM', or 'LOW'"""
-    prefs = fetch_from_github(USER_PREFS_FILE)
-    intensity = prefs.get("intensity", "MEDIUM")
-    if intensity not in ["HIGH", "MEDIUM", "LOW"]:
-        intensity = "MEDIUM"
-    return intensity
 
 
 # ---------------------------------------------------------------------------
@@ -263,15 +246,6 @@ def get_today_mood() -> dict:
         # Gather sources
         festivals = get_festivals_today(today, api_key)
         exams = get_exam_status_today(today)
-        intensity = get_user_intensity()
-        
-        # Load targets based on intensity
-        prefs = fetch_from_github(USER_PREFS_FILE)
-        daily_targets = prefs.get("daily_targets", DEFAULT_INTENSITY_SETTINGS)
-        targets = daily_targets.get(intensity, DEFAULT_INTENSITY_SETTINGS["MEDIUM"])
-
-        min_c = targets["min"]
-        max_c = targets["max"]
 
         # Resolution Priority
         # 1. Major Festival
@@ -281,7 +255,6 @@ def get_today_mood() -> dict:
                 "occasion": festivals["name"],
                 "message_category": "celebration",
                 "skip_probability": 1.0,
-                "commits_range": [0, 0],
                 "log": f"🎆 {festivals['name']} — major festival, zero commits today"
             }
 
@@ -292,7 +265,6 @@ def get_today_mood() -> dict:
                 "occasion": "Exam Day",
                 "message_category": "exam_mode",
                 "skip_probability": 1.0,
-                "commits_range": [0, 0],
                 "log": "📚 Exam day today — zero commits, skipping entirely"
             }
 
@@ -303,21 +275,17 @@ def get_today_mood() -> dict:
                 "occasion": festivals["name"],
                 "message_category": "celebration",
                 "skip_probability": 0.5,
-                "commits_range": [0, 1], # 50/50 chance of 0 or 1
                 "log": f"🎉 {festivals['name']} — minor holiday (50/50 chance of 1 commit)"
             }
 
         # 4. Exam Week (Pre-exam)
         if exams["is_exam_week"]:
-            # Reduce normal range by multiplying by 0.4 and flooring
-            reduced_max = max(0, int(max_c * 0.4))
             return {
                 "mood": "exam_week",
                 "occasion": "Pre-exam week",
                 "message_category": "exam_mode",
                 "skip_probability": 0.6,
-                "commits_range": [0, reduced_max],
-                "log": f"📖 Pre-exam week — reducing commits (max {reduced_max})"
+                "log": f"📖 Pre-exam week — reducing commits"
             }
 
         # 5. Normal Day
@@ -325,9 +293,8 @@ def get_today_mood() -> dict:
             "mood": "normal",
             "occasion": "Regular Day",
             "message_category": None,
-            "skip_probability": 0.0, # We rely on commits_range to potentially yield 0 if min_c == 0
-            "commits_range": [min_c, max_c],
-            "log": f"📅 Normal day ({intensity} intensity) — targeting {min_c}-{max_c} commits"
+            "skip_probability": 0.0, 
+            "log": f"📅 Normal day"
         }
 
     except Exception as e:
@@ -337,8 +304,7 @@ def get_today_mood() -> dict:
             "occasion": "Fallback",
             "message_category": None,
             "skip_probability": 0.0,
-            "commits_range": [1, 3],
-            "log": "📅 Fallback to normal day (1-3 commits)"
+            "log": "📅 Fallback to normal day"
         }
 
 if __name__ == "__main__":

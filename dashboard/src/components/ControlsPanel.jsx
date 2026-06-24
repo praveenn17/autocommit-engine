@@ -126,63 +126,7 @@ function Toggle({ id, label, description, checked, onChange, color = 'green', di
   )
 }
 
-function CommitsSlider({ value, onChange, disabled }) {
-  const percent = ((value - 1) / 6) * 100
 
-  return (
-    <div className="py-3">
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <div className="text-sm font-medium text-fg">Commits per day</div>
-          <div className="text-xs text-fg-muted mt-0.5">Sets target for active days</div>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="text-2xl font-bold text-success-fg">{value}</span>
-          <span className="text-sm text-fg-muted">× /day</span>
-        </div>
-      </div>
-
-      {/* Slider with 7 stops */}
-      <div className="relative">
-        <input
-          id="commits-slider"
-          type="range"
-          min={1}
-          max={7}
-          step={1}
-          value={value}
-          onChange={e => onChange(Number(e.target.value))}
-          disabled={disabled}
-          style={{ '--val': `${percent}%` }}
-          className="w-full h-2 rounded-full cursor-pointer disabled:opacity-40"
-        />
-        {/* Stop markers */}
-        <div className="flex justify-between mt-1.5 px-0.5">
-          {[1, 2, 3, 4, 5, 6, 7].map(n => (
-            <span
-              key={n}
-              className={`text-[10px] font-mono ${n === value ? 'text-success-fg font-bold' : 'text-fg-subtle'}`}
-            >
-              {n}
-            </span>
-          ))}
-        </div>
-      </div>
-
-      {/* Mode indicator */}
-      <div className="mt-2 text-xs text-fg-muted">
-        Mode:{' '}
-        <span className={
-          value === 1 ? 'text-fg-muted' :
-          value <= 3 ? 'text-accent-fg' :
-          'text-attention-fg'
-        }>
-          {value === 1 ? 'Quiet' : value <= 3 ? 'Normal' : 'Burst territory'}
-        </span>
-      </div>
-    </div>
-  )
-}
 
 // ---------------------------------------------------------------------------
 // NEW CONTROL 3: Today's Mood
@@ -271,96 +215,117 @@ function TodaysMood({ username, archiveRepo, pat }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// NEW CONTROL 2: Commit Intensity
-// ---------------------------------------------------------------------------
-function CommitIntensity({ username, archiveRepo, pat }) {
-  const [intensity, setIntensity] = useState(null);
-  const [sha, setSha] = useState(null);
-  const [saving, setSaving] = useState(false);
+function SmartModeCard({ username, archiveRepo, pat, config }) {
+  const [plan, setPlan] = useState(null);
+  const [seed, setSeed] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const fetchIt = async () => {
-      setLoading(true);
-      const { content, sha: fileSha } = await getFile('user_preferences.json', username, archiveRepo, pat);
-      if (!content || !content.intensity) {
-        // Auto-setup silent
-        const randomInt = ['LOW', 'MEDIUM', 'HIGH'][Math.floor(Math.random() * 3)];
-        setIntensity(randomInt);
-        await saveIntensity(randomInt, null, true);
-      } else {
-        setIntensity(content.intensity);
-        setSha(fileSha);
-      }
-      setLoading(false);
-    };
-    fetchIt();
+  const fetchDetails = useCallback(async () => {
+    setLoading(true);
+    const [planRes, seedRes] = await Promise.all([
+      getFile('commit_plan.json', username, archiveRepo, pat),
+      getFile('smart_mode_seed.json', username, archiveRepo, pat)
+    ]);
+    setPlan(planRes.content);
+    setSeed(seedRes.content);
+    setLoading(false);
   }, [username, archiveRepo, pat]);
 
-  const saveIntensity = async (val, fileSha, silent = false) => {
-    setSaving(true);
-    const data = {
-      intensity: val,
-      set_at: new Date().toISOString(),
-      daily_targets: {
-        HIGH: { min: 3, max: 6, burst_chance: 0.3 },
-        MEDIUM: { min: 1, max: 3, burst_chance: 0.15 },
-        LOW: { min: 0, max: 2, burst_chance: 0.05 }
-      }
-    };
+  useEffect(() => { fetchDetails(); }, [fetchDetails]);
+
+  const launchDateStr = config?.launch_date || new Date().toISOString().split('T')[0];
+  const launchDate = new Date(launchDateStr);
+  const today = new Date();
+  const diffTime = Math.abs(today - launchDate);
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  const dayNumber = Math.max(1, diffDays);
+
+  const isTodayPlan = plan?.date === today.toISOString().split('T')[0];
+  const plannedCommits = isTodayPlan && plan?.commits ? plan.commits.length : 0;
+  
+  const scheduledTimes = isTodayPlan && plan?.commits && plan.commits.length > 0
+    ? plan.commits.map(c => {
+        let [h, m] = c.time.split(':');
+        h = parseInt(h);
+        const ampm = h >= 12 ? 'pm' : 'am';
+        h = h % 12 || 12;
+        return `${h}:${m}${ampm}`;
+      }).join(', ')
+    : 'None';
+
+  const triggerRecalculate = async () => {
     try {
-      await putFile('user_preferences.json', data, fileSha, username, archiveRepo, pat);
-      // refetch sha
-      const res = await getFile('user_preferences.json', username, archiveRepo, pat);
-      setSha(res.sha);
-      if (!silent) toast.success(`Intensity set to ${val}`);
+      const response = await fetch(`https://api.github.com/repos/${username}/autocommit-engine/actions/workflows/pattern_engine.yml/dispatches`, {
+        method: 'POST',
+        headers: {
+          Authorization: `token ${pat}`,
+          Accept: 'application/vnd.github.v3+json',
+        },
+        body: JSON.stringify({ ref: 'main' })
+      });
+      if (response.ok) {
+        toast.success("Recalculating today's pattern...");
+      } else {
+        toast.error("Failed to trigger workflow");
+      }
     } catch (e) {
-      if (!silent) toast.error(`Failed to save: ${e.message}`);
-    } finally {
-      setSaving(false);
+      toast.error("Error triggering workflow");
     }
   };
 
-  if (loading) return <div className="skeleton h-24 w-full rounded mb-4" />;
-
-  const options = [
-    { id: 'LOW', label: 'LOW', tooltip: '0–2 commits/day', color: 'bg-fg-muted/20 text-fg-muted hover:bg-fg-muted/30', active: 'bg-fg-muted text-canvas' },
-    { id: 'MEDIUM', label: 'MEDIUM', tooltip: '1–3 commits/day', color: 'bg-accent-muted text-accent-fg hover:bg-accent-muted/80', active: 'bg-accent-emphasis text-white' },
-    { id: 'HIGH', label: 'HIGH', tooltip: '3–6 commits/day', color: 'bg-success-muted text-success-fg hover:bg-success-muted/80', active: 'bg-success-emphasis text-white' }
-  ];
+  if (loading) return <div className="skeleton h-48 w-full rounded mb-4" />;
 
   return (
-    <div className="py-4 border-b border-border">
-      <div className="flex items-center gap-2 mb-3">
-        <Zap size={16} className="text-attention-fg" />
-        <div className="text-sm font-semibold text-fg">Commit Intensity</div>
+    <div className="card mb-4 border border-accent-emphasis/30 bg-canvas-subtle relative overflow-hidden">
+      <div className="absolute top-0 right-0 p-3 flex items-center gap-2">
+        <span className="text-[10px] font-bold text-accent-fg uppercase tracking-widest">ON</span>
+        <div className="w-2 h-2 rounded-full bg-success-fg animate-pulse"></div>
       </div>
       
-      <div className="flex p-1 bg-canvas-subtle rounded-lg border border-border w-full mb-3">
-        {options.map(opt => {
-          const isActive = intensity === opt.id;
-          return (
-            <button
-              key={opt.id}
-              onClick={() => setIntensity(opt.id)}
-              className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${isActive ? opt.active + ' shadow-sm' : 'text-fg-muted hover:text-fg hover:bg-canvas'}`}
-              title={opt.tooltip}
-            >
-              {opt.label}
-            </button>
-          );
-        })}
+      <div className="flex items-center gap-2 mb-3">
+        <div className="text-xl">🧠</div>
+        <h3 className="text-sm font-bold text-fg">Smart Mode</h3>
+      </div>
+      
+      <div className="text-xs text-fg-muted mb-4">Learning from your 60-day pattern</div>
+      
+      <div className="space-y-3 mb-4">
+        <div className="flex justify-between items-center text-sm border-b border-border/50 pb-2">
+          <span className="text-fg-subtle">Day {dayNumber % 60 === 0 ? 60 : dayNumber % 60} of cycle</span>
+          <span className="font-mono text-fg">{dayNumber > 60 ? 'Extended' : 'Base Pattern'}</span>
+        </div>
+        
+        <div className="bg-canvas p-3 rounded-lg border border-border">
+          <div className="text-sm mb-1">
+            <span className="text-fg-subtle">Today's planned commits: </span>
+            <span className="font-bold text-success-fg text-base">{plannedCommits}</span>
+          </div>
+          <div className="text-xs text-fg-muted flex flex-wrap gap-1">
+            <span>Scheduled times:</span>
+            <span className="font-mono text-fg">{scheduledTimes}</span>
+          </div>
+        </div>
+        
+        {seed && seed.analyzed && (
+          <div className="text-xs bg-canvas/50 p-3 rounded-lg border border-border/50">
+            <div className="font-semibold text-fg mb-1">Pattern Stats:</div>
+            <div className="grid grid-cols-2 gap-2 text-fg-subtle">
+              <div>Avg/day: <span className="text-fg font-mono">{seed.analyzed.avg_commits}</span></div>
+              <div>Rest days: <span className="text-fg font-mono">{(seed.analyzed.rest_day_ratio * 100).toFixed(1)}%</span></div>
+              <div className="col-span-2">Last spike: Day <span className="text-fg font-mono">{seed.analyzed.spike_days[seed.analyzed.spike_days.length - 1]}</span></div>
+            </div>
+          </div>
+        )}
       </div>
 
-      <button
-        onClick={() => saveIntensity(intensity, sha)}
-        disabled={saving}
-        className="btn btn-secondary w-full justify-center text-xs py-1.5"
-      >
-        {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />} Save Intensity
+      <div className="text-[10px] text-fg-subtle mb-3 flex items-center gap-1.5">
+        <Zap size={10} className="text-accent-fg" />
+        After day 60: Gemini extends pattern
+      </div>
+      
+      <button onClick={triggerRecalculate} className="btn btn-secondary w-full justify-center text-xs py-1.5">
+        <RefreshCw size={13} /> Recalculate Today
       </button>
-      <div className="text-[10px] text-fg-subtle text-center mt-2">Can be changed anytime. Takes effect from next workflow run.</div>
     </div>
   );
 }
@@ -487,8 +452,6 @@ export default function ControlsPanel({ config, configSha, owner, archiveRepo, o
   const cfg = localConfig || config || {}
   const active      = cfg.active ?? true
   const weekdayOnly = cfg.weekday_only ?? false
-  const burstMode   = cfg.burst_mode ?? true
-  const commitsDay  = cfg.commits_per_day ?? 3
 
   const updateLocal = useCallback((key, value) => {
     setLocalConfig(prev => ({ ...(prev || config || {}), [key]: value }))
@@ -569,33 +532,8 @@ export default function ControlsPanel({ config, configSha, owner, archiveRepo, o
             onChange={v => updateLocal('weekday_only', v)}
             color="teal"
           />
-          <Toggle
-            id="toggle-burst-mode"
-            label="Burst Mode"
-            description="Allow high-activity days with 4-7 commits"
-            checked={burstMode}
-            onChange={v => updateLocal('burst_mode', v)}
-            color="amber"
-          />
-          <CommitsSlider
-            value={commitsDay}
-            onChange={v => updateLocal('commits_per_day', v)}
-          />
-
-          {/* Sick days preview */}
-          {Array.isArray(cfg.sick_days_this_month) && cfg.sick_days_this_month.length > 0 && (
-            <div className="mt-3 pt-3 border-t border-border">
-              <div className="text-xs text-fg-muted mb-2">This month's rest days</div>
-              <div className="flex flex-wrap gap-1.5">
-                {cfg.sick_days_this_month.map(d => (
-                  <span key={d} className="badge badge-gray font-mono text-[10px]">{d}</span>
-                ))}
-              </div>
-            </div>
-          )}
-          {/* NEW CONTROLS (Hybrid Mood Model) */}
-          <div className="mt-4 border-t border-border pt-2">
-            <CommitIntensity username={owner} archiveRepo={archiveRepo} pat={pat} />
+          <div className="mt-4 border-t border-border pt-4">
+            <SmartModeCard username={owner} archiveRepo={archiveRepo} pat={pat} config={cfg} />
             <MonthlyExamDays username={owner} archiveRepo={archiveRepo} pat={pat} />
           </div>
         </div>
