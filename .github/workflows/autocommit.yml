@@ -189,7 +189,7 @@ jobs:
     name: Weekly Telegram Report
     runs-on: ubuntu-latest
     needs: decide
-    if: needs.decide.outputs.is_tuesday == 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.decide.outputs.is_tuesday == 'true'
     steps:
       - name: Checkout project repo
         uses: actions/checkout@v4
