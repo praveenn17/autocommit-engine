@@ -44,6 +44,11 @@ on:
         required: false
         default: false
         type: boolean
+      TEST_TELEGRAM:
+        description: 'Test Telegram connection and send a test message'
+        required: false
+        default: false
+        type: boolean
 
 env:
   TZ: Asia/Kolkata
@@ -749,3 +754,54 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scripts/interview_shield.py
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # JOB 7: Test Telegram Connection
+  # ══════════════════════════════════════════════════════════════════════════
+  test_telegram:
+    name: Test Telegram
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.TEST_TELEGRAM == 'true'
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Send Test Message
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python3 -c '
+          import requests
+          import os
+
+          bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
+
+          message = """
+          🤖 AutoCommit Generator — Telegram Connected!
+
+          ✅ Bot is working correctly
+          ✅ Notifications are enabled
+
+          You will now receive:
+          - Daily streak warnings at 8pm IST
+          - Weekly PDF reports every Tuesday
+          - Network miss alerts
+          - Interview Shield notifications
+
+          AutoCommit is watching. 🟢
+          """
+
+          response = requests.post(
+              f"https://api.telegram.org/bot{bot_token}/sendMessage",
+              json={"chat_id": chat_id, "text": message.strip()}
+          )
+          print(f"Telegram test: {response.status_code} — {response.json()}")
+          '
