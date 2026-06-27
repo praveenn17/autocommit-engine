@@ -233,24 +233,25 @@ function SmartModeCard({ username, archiveRepo, pat, config }) {
 
   useEffect(() => { fetchDetails(); }, [fetchDetails]);
 
-  const launchDateStr = config?.launch_date || new Date().toISOString().split('T')[0];
-  const launchDate = new Date(launchDateStr);
+  const launchDate = new Date(config?.launch_date || '2026-06-22');
   const today = new Date();
-  const diffTime = Math.abs(today - launchDate);
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  const dayNumber = Math.max(1, diffDays);
+  const dayNumber = Math.floor((today - launchDate) / (1000 * 60 * 60 * 24)) + 1;
+  const cycleDay = ((dayNumber - 1) % 60) + 1;
 
   const isTodayPlan = plan?.date === today.toISOString().split('T')[0];
-  const plannedCommits = isTodayPlan && plan?.commits ? plan.commits.length : 0;
-  
-  const scheduledTimes = isTodayPlan && plan?.commits && plan.commits.length > 0
-    ? plan.commits.map(c => {
-        let [h, m] = c.time.split(':');
-        h = parseInt(h);
-        const ampm = h >= 12 ? 'pm' : 'am';
-        h = h % 12 || 12;
-        return `${h}:${m}${ampm}`;
-      }).join(', ')
+  const count = isTodayPlan && Array.isArray(plan?.commits) ? plan.commits.length : 0;
+  const plannedCommits = count;
+
+  const formatTime = (timeStr) => {
+    const [hStr, mStr] = timeStr.split(':');
+    const h = parseInt(hStr, 10);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 || 12;
+    return `${h12}:${mStr} ${ampm}`;
+  };
+
+  const scheduledTimes = isTodayPlan && Array.isArray(plan?.commits) && plan.commits.length > 0
+    ? plan.commits.map(c => formatTime(c.time)).join(', ')
     : 'None';
 
   const triggerRecalculate = async () => {
@@ -291,7 +292,7 @@ function SmartModeCard({ username, archiveRepo, pat, config }) {
       
       <div className="space-y-3 mb-4">
         <div className="flex justify-between items-center text-sm border-b border-border/50 pb-2">
-          <span className="text-fg-subtle">Day {dayNumber % 60 === 0 ? 60 : dayNumber % 60} of cycle</span>
+          <span className="text-fg-subtle">Day {cycleDay} of cycle</span>
           <span className="font-mono text-fg">{dayNumber > 60 ? 'Extended' : 'Base Pattern'}</span>
         </div>
         
@@ -301,8 +302,14 @@ function SmartModeCard({ username, archiveRepo, pat, config }) {
             <span className="font-bold text-success-fg text-base">{plannedCommits}</span>
           </div>
           <div className="text-xs text-fg-muted flex flex-wrap gap-1">
-            <span>Scheduled times:</span>
-            <span className="font-mono text-fg">{scheduledTimes}</span>
+            {plannedCommits === 0 ? (
+              <span className="text-fg-subtle italic">Rest day today 🛋️</span>
+            ) : (
+              <>
+                <span>Scheduled times:</span>
+                <span className="font-mono text-fg">{scheduledTimes}</span>
+              </>
+            )}
           </div>
         </div>
         
