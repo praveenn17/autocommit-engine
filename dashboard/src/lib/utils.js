@@ -136,11 +136,12 @@ export function buildCommitLog(commitHistory, limit = 30) {
         entries.push({ date, time: null, message: '— Rest Day —', mode: 'Rest', status: 'Skipped' })
       } else {
         msgs.forEach((msg, i) => {
+          const isObj = typeof msg === 'object' && msg !== null;
           entries.push({
             date,
-            time: null, // time not stored in history, show date only
-            message: msg,
-            mode: getCommitMode(msgs.length),
+            time: isObj ? msg.time : null,
+            message: isObj ? msg.message : msg,
+            mode: (isObj && msg.mode) ? msg.mode : getCommitMode(msgs.length),
             status: 'Pushed',
           })
         })

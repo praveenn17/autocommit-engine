@@ -12,6 +12,15 @@ function StatusIcon({ status }) {
   return <MinusCircle size={14} className="text-fg-subtle" />
 }
 
+const formatTime = (timeStr) => {
+  if (!timeStr) return '—';
+  const [h, m] = timeStr.split(':');
+  const hour = parseInt(h);
+  const period = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour % 12 || 12;
+  return `${hour12}:${m} ${period}`;
+};
+
 export default function CommitLogTable({ commitHistory, loading }) {
   const [filter, setFilter] = useState('All')
   const [sortAsc, setSortAsc] = useState(false)
@@ -120,7 +129,7 @@ export default function CommitLogTable({ commitHistory, loading }) {
                       {formatDateDisplay(entry.date)}
                     </td>
                     <td className="text-xs font-mono text-fg-subtle hidden md:table-cell">
-                      {entry.time || '—'}
+                      {formatTime(entry.time)}
                     </td>
                     <td className="font-mono text-xs text-fg max-w-0">
                       <div
