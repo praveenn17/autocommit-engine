@@ -54,6 +54,7 @@ export default function App() {
   const [qualityScore,  setQualityScore]  = useState({})
   const [config,        setConfig]        = useState({})
   const [configSha,     setConfigSha]     = useState(null)
+  const [commitPlan,    setCommitPlan]    = useState(null)
 
   // ---------------------------------------------------------------------------
   // Load settings from localStorage on mount (auto-login)
@@ -81,6 +82,7 @@ export default function App() {
       setQualityScore(data.qualityScore   || {})
       setConfig(data.config               || {})
       setConfigSha(data.configSha)
+      setCommitPlan(data.commitPlan       || null)
     } catch (err) {
       if (err.status === 401 || err.message?.includes('401')) {
         setBanner('Token expired. Click here to update your PAT.')
@@ -117,6 +119,7 @@ export default function App() {
     setQualityScore({})
     setConfig({})
     setConfigSha(null)
+    setCommitPlan(null)
     setBanner('')
     setActivePage('dashboard')
   }, [])
@@ -228,6 +231,7 @@ export default function App() {
             {/* Recent commits (last 10) */}
             <CommitLogTable
               commitHistory={commitHistory}
+              commitPlan={commitPlan}
               loading={loading}
             />
 
@@ -269,6 +273,7 @@ export default function App() {
         return (
           <CommitLogTable
             commitHistory={commitHistory}
+            commitPlan={commitPlan}
             loading={loading}
           />
         )

@@ -126,7 +126,7 @@ export function getStatusColor(status) {
 // Build flat commit log from history object
 // ---------------------------------------------------------------------------
 
-export function buildCommitLog(commitHistory, limit = 30) {
+export function buildCommitLog(commitHistory, commitPlan = null, limit = 30) {
   const entries = []
 
   Object.entries(commitHistory)
@@ -137,11 +137,23 @@ export function buildCommitLog(commitHistory, limit = 30) {
       } else {
         msgs.forEach((msg, i) => {
           const isObj = typeof msg === 'object' && msg !== null;
+          const messageText = isObj ? msg.message : msg;
+          let time = isObj ? msg.time : null;
+          let mode = (isObj && msg.mode) ? msg.mode : getCommitMode(msgs.length);
+
+          // Fallback: look up time in commit_plan.json if missing
+          if (!time && commitPlan && commitPlan.date === date && Array.isArray(commitPlan.commits)) {
+            const planCommit = commitPlan.commits.find(c => c.message === messageText);
+            if (planCommit && planCommit.time) {
+              time = planCommit.time;
+            }
+          }
+
           entries.push({
             date,
-            time: isObj ? msg.time : null,
-            message: isObj ? msg.message : msg,
-            mode: (isObj && msg.mode) ? msg.mode : getCommitMode(msgs.length),
+            time: time,
+            message: messageText,
+            mode: mode,
             status: 'Pushed',
           })
         })

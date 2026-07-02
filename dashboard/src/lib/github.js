@@ -55,6 +55,7 @@ export async function loadDashboardData(owner, archiveRepo) {
     'streak_stats.json',
     'quality_score.json',
     'config.json',
+    'commit_plan.json',
   ]
 
   const results = await Promise.allSettled(
@@ -67,6 +68,7 @@ export async function loadDashboardData(owner, archiveRepo) {
     qualityScore:    results[2].status === 'fulfilled' ? results[2].value.data || {} : {},
     config:          results[3].status === 'fulfilled' ? results[3].value.data || {} : {},
     configSha:       results[3].status === 'fulfilled' ? results[3].value.sha : null,
+    commitPlan:      results[4].status === 'fulfilled' ? results[4].value.data || null : null,
   }
 }
 

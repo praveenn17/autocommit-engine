@@ -21,13 +21,13 @@ const formatTime = (timeStr) => {
   return `${hour12}:${m} ${period}`;
 };
 
-export default function CommitLogTable({ commitHistory, loading }) {
+export default function CommitLogTable({ commitHistory, commitPlan, loading }) {
   const [filter, setFilter] = useState('All')
   const [sortAsc, setSortAsc] = useState(false)
   const [page, setPage] = useState(0)
   const [expandedRow, setExpandedRow] = useState(null)
 
-  const allEntries = useMemo(() => buildCommitLog(commitHistory, 200), [commitHistory])
+  const allEntries = useMemo(() => buildCommitLog(commitHistory, commitPlan, 200), [commitHistory, commitPlan])
 
   const filtered = useMemo(() => {
     let entries = filter === 'All' ? allEntries : allEntries.filter(e => e.mode === filter)
