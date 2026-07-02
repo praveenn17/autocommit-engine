@@ -453,14 +453,17 @@ def main() -> None:
     
     day_number = get_total_days_since_launch()
     recent_history = prune_history(history)
+    smart_mode_enabled = config.get("smart_mode_enabled", True)
     
-    if SMART_MODE_AVAILABLE:
+    if smart_mode_enabled and SMART_MODE_AVAILABLE:
         if day_number <= 60:
             count = get_smart_commit_count(day_number, recent_history)
         else:
             gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
             count = get_gemini_extended_pattern(day_number, recent_history, gemini_api_key)
     else:
+        if not smart_mode_enabled:
+            print("[AutoCommit] ⚠️ Smart Mode disabled — using fallback count 2")
         count = 2  # safe fallback
 
     mood = mood_result.get("mood", "normal")
@@ -549,7 +552,7 @@ def main() -> None:
         sys.exit(1)
 
     # Generate commit times (Smart Mode)
-    if SMART_MODE_AVAILABLE:
+    if smart_mode_enabled and SMART_MODE_AVAILABLE:
         times = get_smart_commit_hours(len(messages), day_number)
     else:
         # Simple fallback: spread commits across business hours IST

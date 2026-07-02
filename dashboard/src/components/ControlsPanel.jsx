@@ -215,10 +215,31 @@ function TodaysMood({ username, archiveRepo, pat }) {
   );
 }
 
-function SmartModeCard({ username, archiveRepo, pat, config }) {
+function SmartModeCard({ username, archiveRepo, pat, config, onConfigUpdate }) {
   const [plan, setPlan] = useState(null);
   const [seed, setSeed] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [savingMode, setSavingMode] = useState(false);
+
+  const isSmartModeEnabled = config?.smart_mode_enabled !== false;
+
+  const toggleSmartMode = async (newValue) => {
+    setSavingMode(true);
+    try {
+      const { content, sha } = await getFile('config.json', username, archiveRepo, pat);
+      if (!content) throw new Error('Config not found');
+      
+      const newConfig = { ...content, smart_mode_enabled: newValue };
+      await putFile('config.json', newConfig, sha, username, archiveRepo, pat);
+      
+      onConfigUpdate?.(newConfig);
+      toast.success(`✅ Smart Mode ${newValue ? 'enabled' : 'disabled'}`);
+    } catch (e) {
+      toast.error('❌ Failed to update. Check PAT permissions.');
+    } finally {
+      setSavingMode(false);
+    }
+  };
 
   const fetchDetails = useCallback(async () => {
     setLoading(true);
@@ -279,8 +300,27 @@ function SmartModeCard({ username, archiveRepo, pat, config }) {
   return (
     <div className="card mb-4 border border-accent-emphasis/30 bg-canvas-subtle relative overflow-hidden">
       <div className="absolute top-0 right-0 p-3 flex items-center gap-2">
-        <span className="text-[10px] font-bold text-accent-fg uppercase tracking-widest">ON</span>
-        <div className="w-2 h-2 rounded-full bg-success-fg animate-pulse"></div>
+        <span className={`text-[10px] font-bold uppercase tracking-widest ${isSmartModeEnabled ? 'text-accent-fg' : 'text-fg-muted'}`}>
+          {savingMode ? <Loader2 size={10} className="animate-spin inline" /> : (isSmartModeEnabled ? 'ON' : 'OFF')}
+        </span>
+        <button
+          role="switch"
+          aria-checked={isSmartModeEnabled}
+          disabled={savingMode}
+          onClick={() => toggleSmartMode(!isSmartModeEnabled)}
+          className={`
+            toggle-track w-9 h-5 flex-shrink-0 relative rounded-full transition-colors
+            ${isSmartModeEnabled ? 'bg-success-emphasis' : 'bg-border'}
+            disabled:opacity-40 disabled:cursor-not-allowed
+          `}
+        >
+          <span
+            className={`
+              absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform
+              ${isSmartModeEnabled ? 'translate-x-4' : 'translate-x-0'}
+            `}
+          />
+        </button>
       </div>
       
       <div className="flex items-center gap-2 mb-3">
@@ -289,6 +329,12 @@ function SmartModeCard({ username, archiveRepo, pat, config }) {
       </div>
       
       <div className="text-xs text-fg-muted mb-4">Learning from your 60-day pattern</div>
+
+      {!isSmartModeEnabled && (
+        <div className="mb-4 text-xs bg-attention-muted text-attention-fg px-3 py-2 rounded border border-attention-fg/30">
+          ⚠️ Smart Mode disabled. System will use fallback count of 2 commits/day.
+        </div>
+      )}
       
       <div className="space-y-3 mb-4">
         <div className="flex justify-between items-center text-sm border-b border-border/50 pb-2">
@@ -540,7 +586,7 @@ export default function ControlsPanel({ config, configSha, owner, archiveRepo, o
             color="teal"
           />
           <div className="mt-4 border-t border-border pt-4">
-            <SmartModeCard username={owner} archiveRepo={archiveRepo} pat={pat} config={cfg} />
+            <SmartModeCard username={owner} archiveRepo={archiveRepo} pat={pat} config={cfg} onConfigUpdate={onConfigUpdate} />
             <MonthlyExamDays username={owner} archiveRepo={archiveRepo} pat={pat} />
           </div>
         </div>
